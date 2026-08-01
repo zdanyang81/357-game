@@ -1,0 +1,331 @@
+/**
+ * 357 界面层：渲染棋盘、点选拿取、动画、走子日志、AI 回合调度
+ */
+(function () {
+  'use strict';
+
+  // ---- DOM 引用 ----
+  const board = document.getElementById('board');
+  const turnBanner = document.getElementById('turn-banner');
+  const turnDot = document.getElementById('turn-dot');
+  const turnText = document.getElementById('turn-text');
+  const pickInfo = document.getElementById('pick-info');
+  const btnConfirm = document.getElementById('btn-confirm');
+  const btnCancel = document.getElementById('btn-cancel');
+  const btnHint = document.getElementById('btn-hint');
+  const btnReset = document.getElementById('btn-reset');
+  const btnRestart = document.getElementById('btn-restart');
+  const logList = document.getElementById('log-list');
+  const overlay = document.getElementById('overlay');
+  const resultIcon = document.getElementById('result-icon');
+  const resultTitle = document.getElementById('result-title');
+  const resultSub = document.getElementById('result-sub');
+  const modePvp = document.getElementById('mode-pvp');
+  const modeAi = document.getElementById('mode-ai');
+
+  // ---- 状态 ----
+  let game = G357.createGame(G357.MODE_PVP);
+  let selection = null;   // { row, count } 当前选中的拿取
+  let hintActive = false; // 当前选择是否来自「提示」
+  let busy = false;       // AI 回合 / 动画期间禁止操作
+
+  const AI_THINK_MS = 750; // 模拟思考延迟
+  const DIE_ANIM_MS = 320; // 骰子消失动画时长
+
+  function delay(ms) {
+    return new Promise(function (resolve) { setTimeout(resolve, ms); });
+  }
+
+  // ---- 玩家显示名 ----
+  function playerName(p) {
+    if (game.mode === G357.MODE_AI) {
+      return p === G357.PLAYER_1 ? '你' : '电脑';
+    }
+    return p === G357.PLAYER_1 ? '玩家1' : '玩家2';
+  }
+
+  function playerIcon(p) {
+    if (game.mode === G357.MODE_AI) {
+      return p === G357.PLAYER_1 ? '🙋' : '🤖';
+    }
+    return p === G357.PLAYER_1 ? '🔴' : '🔵';
+  }
+
+  // ---- 渲染棋盘 ----
+  function renderBoard() {
+    board.innerHTML = '';
+    game.piles.forEach(function (n, row) {
+      const rowEl = document.createElement('div');
+      rowEl.className = 'row';
+      rowEl.dataset.row = row;
+      for (let i = 0; i < n; i++) {
+        const die = document.createElement('div');
+        die.className = 'die';
+        die.dataset.row = row;
+        die.dataset.index = i;
+        die.innerHTML =
+          '<span class="pip"></span><span class="pip"></span><span class="pip"></span>';
+        rowEl.appendChild(die);
+      }
+      board.appendChild(rowEl);
+    });
+    refreshRowHighlight();
+    updateBinPanel();
+  }
+
+  // ---- 二进制分析面板：三排数量的二进制 + 异或（支持选中预览） ----
+  function toBits(n) {
+    // 0..7 固定 3 位二进制
+    return n.toString(2).padStart(3, '0');
+  }
+
+  // 当前选中拿取后预计的局面；未选中返回 null
+  function previewPiles() {
+    if (!selection) return null;
+    const piles = game.piles.slice();
+    piles[selection.row] -= selection.count;
+    return piles;
+  }
+
+  function updateBinPanel() {
+    const body = document.getElementById('bin-body');
+    if (!body) return;
+
+    // 选中未确认时按“拿走之后”的局面预览
+    const isPreview = selection !== null;
+    const piles = isPreview ? previewPiles() : game.piles;
+    const xor = piles.reduce(function (a, b) { return a ^ b; });
+
+    function row(label, num, bits, cls) {
+      return '<div class="bin-row ' + (cls || '') + '">' +
+        '<span class="bin-label">' + label + '</span>' +
+        '<span class="bin-num">' + num + '</span>' +
+        '<code class="bin-bits">' + bits.split('').join(' ') + '</code>' +
+        '</div>';
+    }
+
+    body.innerHTML =
+      '<div class="bin-table">' +
+        '<div class="bin-row head"><span>排</span><span>数量</span><span>二进制</span></div>' +
+        row('第1排', piles[0], toBits(piles[0])) +
+        row('第2排', piles[1], toBits(piles[1])) +
+        row('第3排', piles[2], toBits(piles[2])) +
+        '<div class="bin-sep"></div>' +
+        row('异或 XOR', xor, toBits(xor), 'op xor') +
+      '</div>' +
+      (isPreview
+        ? '<p class="bin-preview">👆 预览：按当前选中拿取后的局面计算</p>'
+        : '<p class="bin-tip"><b>异或 (XOR)</b> 是取胜关键：异或 = 0 时轮到的一方处于劣势；' +
+          '异或 ≠ 0 时按「💡 提示」走一步就能让它变 0，稳操胜券。</p>');
+  }
+
+  // ---- 选中状态 ----
+  function clearSelection() {
+    selection = null;
+    refreshRowHighlight();
+    updateControls();
+  }
+
+  // 高亮当前选中的排
+  function refreshRowHighlight() {
+    board.querySelectorAll('.row').forEach(function (rowEl) {
+      rowEl.classList.toggle('row-active', selection !== null && Number(rowEl.dataset.row) === selection.row);
+    });
+  }
+
+  // 根据 selection 给骰子加 .selected（提示时叠加 .hint 脉动）
+  function applySelection() {
+    board.querySelectorAll('.die').forEach(function (die) {
+      const row = Number(die.dataset.row);
+      const index = Number(die.dataset.index);
+      const inSel = selection !== null && row === selection.row && index < selection.count;
+      die.classList.toggle('selected', inSel);
+      die.classList.toggle('hint', hintActive && inSel);
+    });
+    updateBinPanel();
+  }
+
+  // ---- 点击骰子 ----
+  board.addEventListener('click', function (e) {
+    if (busy || G357.isOver(game)) return;
+    const die = e.target.closest('.die');
+    if (!die) return;
+
+    const row = Number(die.dataset.row);
+    const index = Number(die.dataset.index);
+
+    // 该排前 index+1 颗都会被拿走
+    const count = index + 1;
+    // 手动点选会退出「提示」状态
+    hintActive = false;
+    if (selection !== null && selection.row === row && selection.count === count) {
+      // 再点同一颗 = 取消整排选择
+      selection = null;
+    } else {
+      selection = { row: row, count: count };
+    }
+    applySelection();
+    refreshRowHighlight();
+    updateControls();
+  });
+
+  function updateControls() {
+    const hasSel = selection !== null;
+    btnConfirm.disabled = !hasSel || busy || G357.isOver(game);
+    btnCancel.disabled = !hasSel || busy;
+    btnHint.disabled = busy || G357.isOver(game) || game.mode !== G357.MODE_AI || game.currentPlayer !== G357.PLAYER_1;
+    if (hintActive && hasSel) {
+      pickInfo.textContent = `💡 建议：从第 ${selection.row + 1} 排拿走 ${selection.count} 颗，点「确认拿取」即可`;
+    } else if (hasSel) {
+      pickInfo.textContent = `已选：第 ${selection.row + 1} 排前 ${selection.count} 颗`;
+    } else {
+      pickInfo.textContent = '点选要拿走的骰子（只能在同一排拿）';
+    }
+  }
+
+  // ---- 提示：用 AI 策略给出建议并直接选中 ----
+  btnHint.addEventListener('click', function () {
+    if (busy || G357.isOver(game) || game.mode !== G357.MODE_AI || game.currentPlayer !== G357.PLAYER_1) return;
+    const move = G357AI.getMove(game);
+    if (!move) return;
+    selection = { row: move.row, count: move.count };
+    hintActive = true;
+    applySelection();
+    refreshRowHighlight();
+    updateControls();
+  });
+
+  // ---- 确认拿取 ----
+  btnConfirm.addEventListener('click', function () {
+    if (!selection || busy || G357.isOver(game)) return;
+    takeDice(selection.row, selection.count);
+  });
+
+  btnCancel.addEventListener('click', function () {
+    if (busy) return;
+    selection = null;
+    hintActive = false;
+    applySelection();
+    refreshRowHighlight();
+    updateControls();
+  });
+
+  // ---- 执行一步拿取（人 / AI 共用）----
+  async function takeDice(row, count) {
+    busy = true;
+    const mover = game.currentPlayer;
+    selection = null;
+    hintActive = false;
+    applySelection();
+    updateControls();
+
+    // 1) 动画：选中的骰子消失
+    const toRemove = [];
+    board.querySelectorAll('.die').forEach(function (die) {
+      if (Number(die.dataset.row) === row && Number(die.dataset.index) < count) {
+        toRemove.push(die);
+        die.classList.add('removing');
+      }
+    });
+    await delay(DIE_ANIM_MS);
+
+    // 2) 落子
+    const result = G357.makeMove(game, row, count);
+    if (!result.ok) {
+      busy = false;
+      updateControls();
+      return;
+    }
+
+    // 3) 日志
+    addLog(mover, row, count);
+
+    // 4) 重渲染
+    renderBoard();
+    updateTurnBanner();
+
+    if (result.winner !== null) {
+      showResult(result.winner);
+      busy = false;
+      updateControls();
+      return;
+    }
+
+    // 5) AI 回合调度
+    if (game.mode === G357.MODE_AI && game.currentPlayer === G357.PLAYER_2) {
+      turnText.textContent = '🤖 电脑思考中…';
+      await delay(AI_THINK_MS);
+      if (G357.isOver(game)) return;
+      const move = G357AI.getMove(game);
+      if (move) await takeDice(move.row, move.count);
+      return;
+    }
+
+    busy = false;
+    updateControls();
+  }
+
+  // ---- 回合指示 ----
+  function updateTurnBanner() {
+    const p = game.currentPlayer;
+    turnBanner.classList.remove('player-1', 'player-2');
+    turnBanner.classList.add(p === G357.PLAYER_1 ? 'player-1' : 'player-2');
+    if (G357.isOver(game)) {
+      turnText.textContent = '对局结束';
+    } else {
+      turnText.textContent = `${playerIcon(p)} 轮到 ${playerName(p)}`;
+    }
+  }
+
+  // ---- 走子日志 ----
+  function addLog(player, row, count) {
+    // 移除空占位提示
+    const empty = logList.querySelector('.log-empty');
+    if (empty) empty.remove();
+    const li = document.createElement('li');
+    li.className = player === G357.PLAYER_1 ? 'p1' : 'p2';
+    li.textContent = `${playerName(player)}：从第 ${row + 1} 排拿走 ${count} 颗`;
+    logList.appendChild(li);
+    logList.scrollTop = logList.scrollHeight;
+  }
+
+  // ---- 胜负横幅 ----
+  function showResult(winner) {
+    const loser = winner === G357.PLAYER_1 ? G357.PLAYER_2 : G357.PLAYER_1;
+    resultTitle.textContent = `${playerName(winner)} 获胜！`;
+    resultTitle.className = 'result-title ' + (winner === G357.PLAYER_1 ? 'win-p1' : 'win-p2');
+    resultSub.textContent = `${playerName(loser)} 拿到了最后一颗骰子`;
+    resultIcon.textContent = winner === G357.PLAYER_1 ? '🏆' : (game.mode === G357.MODE_AI ? '🤖' : '🏆');
+    overlay.classList.remove('hidden');
+  }
+
+  // ---- 模式切换 ----
+  function setMode(mode) {
+    game = G357.createGame(mode);
+    modePvp.classList.toggle('active', mode === G357.MODE_PVP);
+    modeAi.classList.toggle('active', mode === G357.MODE_AI);
+    startNewGame();
+  }
+
+  modePvp.addEventListener('click', function () { setMode(G357.MODE_PVP); });
+  modeAi.addEventListener('click', function () { setMode(G357.MODE_AI); });
+
+  // ---- 重新开始 ----
+  function startNewGame() {
+    busy = false;
+    selection = null;
+    hintActive = false;
+    G357.reset(game);
+    logList.innerHTML = '<li class="log-empty">还没有走子记录</li>';
+    overlay.classList.add('hidden');
+    renderBoard();
+    updateTurnBanner();
+    updateControls();
+  }
+
+  btnReset.addEventListener('click', startNewGame);
+  btnRestart.addEventListener('click', startNewGame);
+
+  // ---- 启动 ----
+  startNewGame();
+})();

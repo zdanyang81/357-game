@@ -1,0 +1,82 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>357 · 酒吧骰子游戏</title>
+  <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+  <div class="app">
+    <header class="header">
+      <h1 class="title">3<span class="title-sep">·</span>5<span class="title-sep">·</span>7</h1>
+      <p class="subtitle">酒吧经典骰子博弈 · 拿到最后一颗骰子的人输</p>
+    </header>
+
+    <div class="layout">
+      <!-- 左列：主操作区 -->
+      <main class="main-col">
+        <!-- 模式选择 -->
+        <section class="mode-panel">
+          <button class="mode-btn" data-mode="pvp" id="mode-pvp">👥 双人对战</button>
+          <button class="mode-btn" data-mode="ai" id="mode-ai">🤖 人机对战</button>
+        </section>
+
+        <!-- 玩家指示 -->
+        <section class="turn-banner" id="turn-banner">
+          <span class="turn-dot" id="turn-dot"></span>
+          <span id="turn-text">请选择模式开始游戏</span>
+        </section>
+
+        <!-- 棋盘 -->
+        <section class="board" id="board" aria-label="骰子棋盘"></section>
+
+        <!-- 操作区 -->
+        <section class="controls">
+          <div class="pick-info" id="pick-info">点选要拿走的骰子（只能在同一排拿）</div>
+          <div class="pick-actions" id="pick-actions">
+            <button class="btn btn-hint" id="btn-hint">💡 提示</button>
+            <button class="btn btn-confirm" id="btn-confirm" disabled>确认拿取</button>
+            <button class="btn btn-cancel" id="btn-cancel" disabled>取消</button>
+          </div>
+        </section>
+
+        <footer class="footer">
+          <button class="btn btn-reset" id="btn-reset">🔄 重新开始</button>
+        </footer>
+      </main>
+
+      <!-- 右列：信息面板 -->
+      <aside class="side-col">
+        <!-- 二进制分析（可折叠） -->
+        <section class="bin-panel">
+          <details id="bin-details" open>
+            <summary>🧮 二进制分析</summary>
+            <div class="bin-body" id="bin-body"></div>
+          </details>
+        </section>
+
+        <!-- 走子记录 -->
+        <section class="log-panel">
+          <h2 class="log-title">📜 走子记录</h2>
+          <ol class="log-list" id="log-list"></ol>
+        </section>
+      </aside>
+    </div>
+
+    <!-- 胜负横幅 -->
+    <div class="overlay hidden" id="overlay">
+      <div class="result-card">
+        <div class="result-icon" id="result-icon">🏆</div>
+        <h2 class="result-title" id="result-title"></h2>
+        <p class="result-sub" id="result-sub"></p>
+        <button class="btn btn-restart" id="btn-restart">再来一局</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="js/game.js"></script>
+  <script src="js/ai.js"></script>
+  <script src="js/ui.js"></script>
+</body>
+</html>
