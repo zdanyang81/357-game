@@ -47,6 +47,8 @@ function makeEl(tag) {
     set innerHTML(v) { this._innerHTML = v; if (v === '') this.children = []; },
     addEventListener(type, fn) { (this._listeners[type] = this._listeners[type] || []).push(fn); },
     dispatch(type, ev) { (this._listeners[type] || []).forEach((fn) => fn(ev || {})); },
+    setAttribute(k, v) { this.dataset[k] = String(v); },
+    getAttribute(k) { return this.dataset[k] !== undefined ? this.dataset[k] : null; },
     appendChild(c) { this.children.push(c); c.parentEl = this; },
     remove() { if (this.parentEl) { const i = this.parentEl.children.indexOf(this); if (i >= 0) this.parentEl.children.splice(i, 1); } },
     querySelectorAll(sel) {

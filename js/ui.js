@@ -24,6 +24,13 @@
   const modeAi = document.getElementById('mode-ai');
   const aiFirstToggle = document.getElementById('ai-first-toggle');
   const aiFirstInput = document.getElementById('ai-first');
+  const avatarPanel = document.getElementById('avatar-panel');
+  const avatarP1 = document.getElementById('avatar-p1');
+  const avatarP2 = document.getElementById('avatar-p2');
+
+  // 双人模式形象集（男女各 3 个）与双方选择（索引）
+  const AVATARS = ['👨‍💼', '👨‍🍳', '👨‍🚀', '👩‍💼', '👩‍🎨', '👩‍🚀'];
+  const avatar = { p1: 0, p2: 3 };
 
   // ---- 状态 ----
   let game = G357.createGame(G357.MODE_PVP);
@@ -51,7 +58,34 @@
     if (game.mode === G357.MODE_AI) {
       return p === G357.PLAYER_1 ? '🙋' : '🤖';
     }
-    return p === G357.PLAYER_1 ? '🔴' : '🔵';
+    return p === G357.PLAYER_1 ? AVATARS[avatar.p1] : AVATARS[avatar.p2];
+  }
+
+  // ---- 双人模式形象选择面板 ----
+  function renderAvatarPanel() {
+    [avatarP1, avatarP2].forEach(function (box, i) {
+      const mine = i === 0 ? avatar.p1 : avatar.p2;
+      const theirs = i === 0 ? avatar.p2 : avatar.p1;
+      box.innerHTML = '';
+      AVATARS.forEach(function (face, idx) {
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = 'avatar-btn' + (idx === mine ? ' active' : '');
+        btn.textContent = face;
+        // 冲突约束：对方已选的形象本组禁用，保证双方形象永不相同
+        btn.disabled = idx === theirs;
+        btn.setAttribute('aria-label', '选择形象 ' + face);
+        btn.setAttribute('aria-pressed', idx === mine ? 'true' : 'false');
+        btn.addEventListener('click', function () {
+          if (idx === theirs) return; // 防御：程序化派发时同样拦截冲突
+          if (i === 0) { avatar.p1 = idx; } else { avatar.p2 = idx; }
+          renderAvatarPanel();
+          updateTurnBanner();
+          updateControls();
+        });
+        box.appendChild(btn);
+      });
+    });
   }
 
   // ---- 渲染棋盘 ----
@@ -280,7 +314,9 @@
     if (empty) empty.remove();
     const li = document.createElement('li');
     li.className = player === G357.PLAYER_1 ? 'p1' : 'p2';
-    li.textContent = `${playerName(player)}：从第 ${row + 1} 排拿走 ${count} 颗`;
+    // 形象前缀仅用于双人模式；AI 模式日志保持纯文字不变
+    const prefix = game.mode === G357.MODE_PVP ? playerIcon(player) + ' ' : '';
+    li.textContent = `${prefix}${playerName(player)}：从第 ${row + 1} 排拿走 ${count} 颗`;
     logList.appendChild(li);
     logList.scrollTop = logList.scrollHeight;
   }
@@ -291,7 +327,9 @@
     resultTitle.textContent = `${playerName(winner)} 获胜！`;
     resultTitle.className = 'result-title ' + (winner === G357.PLAYER_1 ? 'win-p1' : 'win-p2');
     resultSub.textContent = `${playerName(loser)} 拿到了最后一颗骰子`;
-    resultIcon.textContent = winner === G357.PLAYER_1 ? '🏆' : (game.mode === G357.MODE_AI ? '🤖' : '🏆');
+    resultIcon.textContent = winner === G357.PLAYER_1
+      ? (game.mode === G357.MODE_AI ? '🏆' : AVATARS[avatar.p1])
+      : (game.mode === G357.MODE_AI ? '🤖' : AVATARS[avatar.p2]);
     overlay.classList.remove('hidden');
   }
 
@@ -301,6 +339,7 @@
     modePvp.classList.toggle('active', mode === G357.MODE_PVP);
     modeAi.classList.toggle('active', mode === G357.MODE_AI);
     aiFirstToggle.classList.toggle('hidden', mode !== G357.MODE_AI);
+    avatarPanel.classList.toggle('hidden', mode !== G357.MODE_PVP);
     startNewGame();
   }
 
@@ -344,5 +383,7 @@
   btnRestart.addEventListener('click', startNewGame);
 
   // ---- 启动 ----
+  renderAvatarPanel();
+  avatarPanel.classList.toggle('hidden', game.mode !== G357.MODE_PVP); // 默认 PvP：首屏即显示
   startNewGame();
 })();
