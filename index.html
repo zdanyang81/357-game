@@ -27,26 +27,26 @@
           <input type="checkbox" id="ai-first"> 🤖 电脑先手
         </label>
 
-        <!-- 玩家形象选择（仅双人模式显示） -->
-        <section class="avatar-panel hidden" id="avatar-panel">
-          <div class="avatar-group">
-            <span class="avatar-label">玩家一</span>
-            <div class="avatar-options" id="avatar-p1"></div>
-          </div>
-          <div class="avatar-group">
-            <span class="avatar-label">玩家二</span>
-            <div class="avatar-options" id="avatar-p2"></div>
-          </div>
-        </section>
-
         <!-- 玩家指示 -->
         <section class="turn-banner" id="turn-banner">
           <span class="turn-dot" id="turn-dot"></span>
           <span id="turn-text">请选择模式开始游戏</span>
         </section>
 
-        <!-- 棋盘 -->
-        <section class="board" id="board" aria-label="骰子棋盘"></section>
+        <!-- 棋盘区：玩家一形象 | 棋盘 | 玩家二形象 -->
+        <div class="board-area">
+          <aside class="avatar-side hidden" id="avatar-p1-side" aria-label="玩家一形象选择">
+            <span class="avatar-label">玩家一</span>
+            <div class="avatar-options" id="avatar-p1"></div>
+          </aside>
+
+          <section class="board" id="board" aria-label="骰子棋盘"></section>
+
+          <aside class="avatar-side hidden" id="avatar-p2-side" aria-label="玩家二形象选择">
+            <span class="avatar-label">玩家二</span>
+            <div class="avatar-options" id="avatar-p2"></div>
+          </aside>
+        </div>
 
         <!-- 操作区 -->
         <section class="controls">

@@ -24,7 +24,8 @@
   const modeAi = document.getElementById('mode-ai');
   const aiFirstToggle = document.getElementById('ai-first-toggle');
   const aiFirstInput = document.getElementById('ai-first');
-  const avatarPanel = document.getElementById('avatar-panel');
+  const avatarP1Side = document.getElementById('avatar-p1-side');
+  const avatarP2Side = document.getElementById('avatar-p2-side');
   const avatarP1 = document.getElementById('avatar-p1');
   const avatarP2 = document.getElementById('avatar-p2');
 
@@ -61,7 +62,13 @@
     return p === G357.PLAYER_1 ? AVATARS[avatar.p1] : AVATARS[avatar.p2];
   }
 
-  // ---- 双人模式形象选择面板 ----
+  // ---- 双人模式形象选择面板（分列棋盘左右） ----
+  // 形象面板显隐：左右两个侧栏同步切换（仅双人模式显示）
+  function setAvatarPanelVisible(visible) {
+    avatarP1Side.classList.toggle('hidden', !visible);
+    avatarP2Side.classList.toggle('hidden', !visible);
+  }
+
   function renderAvatarPanel() {
     [avatarP1, avatarP2].forEach(function (box, i) {
       const mine = i === 0 ? avatar.p1 : avatar.p2;
@@ -339,7 +346,7 @@
     modePvp.classList.toggle('active', mode === G357.MODE_PVP);
     modeAi.classList.toggle('active', mode === G357.MODE_AI);
     aiFirstToggle.classList.toggle('hidden', mode !== G357.MODE_AI);
-    avatarPanel.classList.toggle('hidden', mode !== G357.MODE_PVP);
+    setAvatarPanelVisible(mode === G357.MODE_PVP);
     startNewGame();
   }
 
@@ -384,6 +391,6 @@
 
   // ---- 启动 ----
   renderAvatarPanel();
-  avatarPanel.classList.toggle('hidden', game.mode !== G357.MODE_PVP); // 默认 PvP：首屏即显示
+  setAvatarPanelVisible(game.mode === G357.MODE_PVP); // 默认 PvP：首屏即显示
   startNewGame();
 })();
