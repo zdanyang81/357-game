@@ -27,6 +27,18 @@
           <input type="checkbox" id="ai-first"> 🤖 电脑先手
         </label>
 
+        <!-- 玩家形象选择（仅双人模式显示） -->
+        <section class="avatar-panel hidden" id="avatar-panel">
+          <div class="avatar-group">
+            <span class="avatar-label">玩家一</span>
+            <div class="avatar-options" id="avatar-p1"></div>
+          </div>
+          <div class="avatar-group">
+            <span class="avatar-label">玩家二</span>
+            <div class="avatar-options" id="avatar-p2"></div>
+          </div>
+        </section>
+
         <!-- 玩家指示 -->
         <section class="turn-banner" id="turn-banner">
           <span class="turn-dot" id="turn-dot"></span>

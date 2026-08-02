@@ -228,7 +228,66 @@ body {
   50% { transform: scale(1.08); }
 }
 
-/* ===== AI 先手开关 ===== */
+/* ===== 双人模式形象选择 ===== */
+.avatar-panel {
+  margin-top: 10px;
+  padding: 10px 12px;
+  background: var(--bg-panel);
+  border: 1px solid var(--wood-light);
+  border-radius: var(--radius);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.avatar-panel.hidden {
+  display: none;
+}
+
+.avatar-group {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.avatar-label {
+  font-size: 13px;
+  color: var(--text-dim);
+  min-width: 48px;
+}
+
+.avatar-options {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.avatar-btn {
+  width: 40px;
+  height: 40px;
+  font-size: 22px;
+  line-height: 1;
+  border: 2px solid transparent;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.05);
+  cursor: pointer;
+  transition: border-color 0.15s, background 0.15s, opacity 0.15s;
+}
+
+.avatar-btn:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.12);
+}
+
+.avatar-btn.active {
+  border-color: var(--gold);
+  background: rgba(255, 215, 0, 0.12);
+}
+
+.avatar-btn:disabled {
+  opacity: 0.3;
+  cursor: not-allowed;
+}
+
 .ai-first-toggle {
   display: inline-flex;
   align-items: center;
