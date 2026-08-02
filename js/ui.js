@@ -29,9 +29,28 @@
   const avatarP1 = document.getElementById('avatar-p1');
   const avatarP2 = document.getElementById('avatar-p2');
 
-  // 双人模式形象集（男女各 3 个）与双方选择（索引）
-  const AVATARS = ['👨‍💼', '👨‍🍳', '👨‍🚀', '👩‍💼', '👩‍🎨', '👩‍🚀'];
+  // 双人模式形象（男女各 3 个）与双方选择（索引）；使用自制卡通头像 SVG
+  const AVATARS = [
+    'assets/avatars/avatar-0.svg', // 商务男
+    'assets/avatars/avatar-1.svg', // 厨师
+    'assets/avatars/avatar-2.svg', // 宇航员
+    'assets/avatars/avatar-3.svg', // 商务女
+    'assets/avatars/avatar-4.svg', // 画家
+    'assets/avatars/avatar-5.svg'  // 女宇航员
+  ];
+  const AVATAR_NAMES = ['商务男', '厨师', '宇航员', '商务女', '画家', '女宇航员'];
   const avatar = { p1: 0, p2: 3 };
+
+  // 形象图标 HTML：PvP 返回 <img>（仅匹配本地 SVG 路径），AI 返回 emoji
+  // 注意：face 必须来自上方 AVATARS 常量数组（受信值），不得拼接用户输入。
+  function avatarIconHtml(face) {
+    if (face.slice(-4) === '.svg') {
+      const idx = AVATARS.indexOf(face);
+      const name = idx >= 0 ? AVATAR_NAMES[idx] : '玩家形象';
+      return '<img class="avatar-ic" src="' + face + '" alt="' + name + '">';
+    }
+    return face;
+  }
 
   // ---- 状态 ----
   let game = G357.createGame(G357.MODE_PVP);
@@ -78,10 +97,10 @@
         const btn = document.createElement('button');
         btn.type = 'button';
         btn.className = 'avatar-btn' + (idx === mine ? ' active' : '');
-        btn.textContent = face;
+        btn.innerHTML = avatarIconHtml(face);
         // 冲突约束：对方已选的形象本组禁用，保证双方形象永不相同
         btn.disabled = idx === theirs;
-        btn.setAttribute('aria-label', '选择形象 ' + face);
+        btn.setAttribute('aria-label', '选择形象 ' + (idx >= 0 ? AVATAR_NAMES[idx] : (idx + 1)));
         btn.setAttribute('aria-pressed', idx === mine ? 'true' : 'false');
         btn.addEventListener('click', function () {
           if (idx === theirs) return; // 防御：程序化派发时同样拦截冲突
@@ -310,7 +329,7 @@
     if (G357.isOver(game)) {
       turnText.textContent = '对局结束';
     } else {
-      turnText.textContent = `${playerIcon(p)} 轮到 ${playerName(p)}`;
+      turnText.innerHTML = `${avatarIconHtml(playerIcon(p))} 轮到 ${playerName(p)}`;
     }
   }
 
@@ -322,8 +341,8 @@
     const li = document.createElement('li');
     li.className = player === G357.PLAYER_1 ? 'p1' : 'p2';
     // 形象前缀仅用于双人模式；AI 模式日志保持纯文字不变
-    const prefix = game.mode === G357.MODE_PVP ? playerIcon(player) + ' ' : '';
-    li.textContent = `${prefix}${playerName(player)}：从第 ${row + 1} 排拿走 ${count} 颗`;
+    const prefix = game.mode === G357.MODE_PVP ? avatarIconHtml(playerIcon(player)) + ' ' : '';
+    li.innerHTML = `${prefix}${playerName(player)}：从第 ${row + 1} 排拿走 ${count} 颗`;
     logList.appendChild(li);
     logList.scrollTop = logList.scrollHeight;
   }
@@ -334,9 +353,9 @@
     resultTitle.textContent = `${playerName(winner)} 获胜！`;
     resultTitle.className = 'result-title ' + (winner === G357.PLAYER_1 ? 'win-p1' : 'win-p2');
     resultSub.textContent = `${playerName(loser)} 拿到了最后一颗骰子`;
-    resultIcon.textContent = winner === G357.PLAYER_1
-      ? (game.mode === G357.MODE_AI ? '🏆' : AVATARS[avatar.p1])
-      : (game.mode === G357.MODE_AI ? '🤖' : AVATARS[avatar.p2]);
+    resultIcon.innerHTML = winner === G357.PLAYER_1
+      ? (game.mode === G357.MODE_AI ? '🏆' : avatarIconHtml(AVATARS[avatar.p1]))
+      : (game.mode === G357.MODE_AI ? '🤖' : avatarIconHtml(AVATARS[avatar.p2]));
     overlay.classList.remove('hidden');
   }
 
