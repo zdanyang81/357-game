@@ -274,7 +274,24 @@ body {
   background: rgba(255, 255, 255, 0.05);
   cursor: pointer;
   transition: border-color 0.15s, background 0.15s, opacity 0.15s;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 2px;
 }
+
+/* 卡通形象 <img>：随容器尺寸 */
+.avatar-btn .avatar-ic {
+  width: 100%;
+  height: 100%;
+  border-radius: 8px;
+  object-fit: cover;
+}
+
+/* 回合条 / 日志 / 横幅中的形象图标 */
+.turn-banner .avatar-ic { width: 26px; height: 26px; border-radius: 50%; vertical-align: -6px; }
+.log-list .avatar-ic { width: 18px; height: 18px; border-radius: 50%; vertical-align: -3px; }
+.result-icon .avatar-ic { width: 56px; height: 56px; border-radius: 50%; }
 
 .avatar-btn:hover:not(:disabled) {
   background: rgba(255, 255, 255, 0.12);

@@ -44,7 +44,12 @@ function makeEl(tag) {
     _listeners: {},
     classList: makeClassList(),
     get innerHTML() { return this._innerHTML; },
-    set innerHTML(v) { this._innerHTML = v; if (v === '') this.children = []; },
+    set innerHTML(v) {
+      this._innerHTML = v;
+      // 模拟浏览器：innerHTML 设置后 textContent 反映解析后的纯文本
+      this.textContent = String(v).replace(/<[^>]*>/g, '');
+      if (v === '') this.children = [];
+    },
     addEventListener(type, fn) { (this._listeners[type] = this._listeners[type] || []).push(fn); },
     dispatch(type, ev) { (this._listeners[type] || []).forEach((fn) => fn(ev || {})); },
     setAttribute(k, v) { this.dataset[k] = String(v); },

@@ -18,7 +18,12 @@ function makeEl(tag) {
     checked: false, _innerHTML: '', style: {}, scrollTop: 0, scrollHeight: 0, _listeners: {},
     classList: makeClassList(),
     get innerHTML() { return this._innerHTML; },
-    set innerHTML(v) { this._innerHTML = v; if (v === '') this.children = []; },
+    set innerHTML(v) {
+      this._innerHTML = v;
+      // 模拟浏览器：innerHTML 设置后 textContent 反映解析后的纯文本
+      this.textContent = String(v).replace(/<[^>]*>/g, '');
+      if (v === '') this.children = [];
+    },
     addEventListener(type, fn) { (this._listeners[type] = this._listeners[type] || []).push(fn); },
     dispatch(type, ev) { (this._listeners[type] || []).forEach((fn) => fn(ev || {})); },
     setAttribute(k, v) { this.dataset[k] = String(v); },
@@ -105,9 +110,13 @@ async function main() {
   // ---- 2. 默认选择：玩家一=0 玩家二=3 ----
   assert.strictEqual(avButtons(avatarP1).length, 6, '玩家一有 6 个候选');
   assert.strictEqual(avButtons(avatarP2).length, 6, '玩家二有 6 个候选');
+  // 选择面板渲染卡通头像 <img>（不再是 emoji 文本）
+  assert.ok(avButtons(avatarP1)[0].innerHTML.includes('avatar-0.svg'), '选择面板按钮渲染 SVG 头像');
+  assert.ok(avButtons(avatarP1)[0].innerHTML.includes('<img'), '选择面板按钮含 <img>');
+  assert.ok(avButtons(avatarP1)[0].innerHTML.includes('商务男'), 'img alt 带具体形象名');
   assert.ok(isActive(avatarP1, 0), '玩家一默认选中 0');
   assert.ok(isActive(avatarP2, 3), '玩家二默认选中 3');
-  assert.ok(turnText.textContent.includes('👨\u200d💼'), `当前轮次(玩家1)显示其形象: ${turnText.textContent}`);
+  assert.ok(turnText.innerHTML.includes('avatar-0.svg'), `当前轮次(玩家1)显示其卡通形象: ${turnText.innerHTML}`);
 
   // ---- 3. 冲突拦截 ----
   assert.strictEqual(avButtons(avatarP1)[3].disabled, true, '玩家一不能选玩家二已占用形象(3)');
@@ -127,22 +136,23 @@ async function main() {
   clickDie(0, 0); // 玩家1 选第1排1颗
   btnConfirm.dispatch('click');
   await sleep(600); // 动画 320ms
-  assert.ok(textOf(logList).includes('👨\u200d💼'), `日志显示玩家1形象: ${textOf(logList)}`);
+  const logHtml = () => logList.children.map((li) => li.innerHTML).join('|');
+  assert.ok(logHtml().includes('avatar-0.svg'), `日志显示玩家1卡通形象: ${logHtml()}`);
   clickDie(0, 0); // 玩家2（当前轮次）
   btnConfirm.dispatch('click');
   await sleep(600);
-  assert.ok(textOf(logList).includes('👩\u200d💼'), `日志显示玩家2形象: ${textOf(logList)}`);
+  assert.ok(logHtml().includes('avatar-3.svg'), `日志显示玩家2卡通形象: ${logHtml()}`);
 
   // ---- 5. AI 模式不变（回合条 + 日志均无形象前缀） ----
   modeAi.dispatch('click');
-  assert.ok(turnText.textContent.includes('🙋'), `AI 模式回合条显示 🙋: ${turnText.textContent}`);
-  assert.ok(!turnText.textContent.includes('👨\u200d💼'), 'AI 模式回合条不使用 PvP 形象');
+  assert.ok(turnText.innerHTML.includes('🙋'), `AI 模式回合条显示 🙋: ${turnText.innerHTML}`);
+  assert.ok(!turnText.innerHTML.includes('avatar-'), 'AI 模式回合条不使用 PvP 卡通形象');
   assert.ok(sideHidden(), 'AI 模式形象面板隐藏（两侧）');
   // AI 模式走一步，日志保持纯文字（无 🙋 前缀）
   clickDie(0, 0);
   btnConfirm.dispatch('click');
   await sleep(600);
-  const aiLog = textOf(logList);
+  const aiLog = logList.children.map((li) => li.innerHTML).join('|');
   assert.ok(aiLog.includes('你：从第 1 排拿走 1 颗'), `AI 日志为纯文字: ${aiLog}`);
   assert.ok(!aiLog.includes('🙋'), 'AI 日志无形象前缀');
 
@@ -156,7 +166,7 @@ async function main() {
   clickDie(2, 5); btnConfirm.dispatch('click'); await sleep(400); // 第3排拿6颗 → [0,0,1]，轮到玩家2
   clickDie(2, 0); btnConfirm.dispatch('click'); await sleep(600); // 玩家2 拿最后一颗 → 玩家2输，玩家1胜
   const resultIcon = doc.getElementById('result-icon');
-  assert.ok(resultIcon.textContent.includes('👨\u200d💼'), `横幅显示玩家1形象(获胜者): ${resultIcon.textContent}`);
+  assert.ok(resultIcon.innerHTML.includes('avatar-0.svg'), `横幅显示玩家1卡通形象(获胜者): ${resultIcon.innerHTML}`);
 
   console.log('✅ 形象选择行为验证通过（首屏显隐/默认/冲突拦截/释放/双方日志形象/AI不变/横幅形象）');
 }
