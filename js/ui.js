@@ -22,9 +22,12 @@
   const resultSub = document.getElementById('result-sub');
   const modePvp = document.getElementById('mode-pvp');
   const modeAi = document.getElementById('mode-ai');
+  const aiFirstToggle = document.getElementById('ai-first-toggle');
+  const aiFirstInput = document.getElementById('ai-first');
 
   // ---- 状态 ----
   let game = G357.createGame(G357.MODE_PVP);
+  let gameToken = 0;      // 局次代际：每次开新局递增，用于丢弃过期异步任务
   let selection = null;   // { row, count } 当前选中的拿取
   let hintActive = false; // 当前选择是否来自「提示」
   let busy = false;       // AI 回合 / 动画期间禁止操作
@@ -115,18 +118,11 @@
       '</div>' +
       (isPreview
         ? '<p class="bin-preview">👆 预览：按当前选中拿取后的局面计算</p>'
-        : '<p class="bin-tip"><b>异或 (XOR)</b> 是取胜关键：异或 = 0 时轮到的一方处于劣势；' +
-          '异或 ≠ 0 时按「💡 提示」走一步就能让它变 0，稳操胜券。</p>');
+        : '<p class="bin-tip"><b>异或 (XOR)</b> 是普通 Nim 的取胜关键；本游戏是 misère 规则' +
+          '（拿最后一颗输），残局存在例外，请以「💡 提示」的精确解为准。</p>');
   }
 
-  // ---- 选中状态 ----
-  function clearSelection() {
-    selection = null;
-    refreshRowHighlight();
-    updateControls();
-  }
-
-  // 高亮当前选中的排
+  // ---- 高亮当前选中的排 ----
   function refreshRowHighlight() {
     board.querySelectorAll('.row').forEach(function (rowEl) {
       rowEl.classList.toggle('row-active', selection !== null && Number(rowEl.dataset.row) === selection.row);
@@ -212,6 +208,7 @@
 
   // ---- 执行一步拿取（人 / AI 共用）----
   async function takeDice(row, count) {
+    const token = gameToken;
     busy = true;
     const mover = game.currentPlayer;
     selection = null;
@@ -220,14 +217,13 @@
     updateControls();
 
     // 1) 动画：选中的骰子消失
-    const toRemove = [];
     board.querySelectorAll('.die').forEach(function (die) {
       if (Number(die.dataset.row) === row && Number(die.dataset.index) < count) {
-        toRemove.push(die);
         die.classList.add('removing');
       }
     });
     await delay(DIE_ANIM_MS);
+    if (token !== gameToken) return; // 对局已重置/切换，丢弃过期动作
 
     // 2) 落子
     const result = G357.makeMove(game, row, count);
@@ -255,7 +251,7 @@
     if (game.mode === G357.MODE_AI && game.currentPlayer === G357.PLAYER_2) {
       turnText.textContent = '🤖 电脑思考中…';
       await delay(AI_THINK_MS);
-      if (G357.isOver(game)) return;
+      if (token !== gameToken || G357.isOver(game)) return;
       const move = G357AI.getMove(game);
       if (move) await takeDice(move.row, move.count);
       return;
@@ -304,6 +300,7 @@
     game = G357.createGame(mode);
     modePvp.classList.toggle('active', mode === G357.MODE_PVP);
     modeAi.classList.toggle('active', mode === G357.MODE_AI);
+    aiFirstToggle.classList.toggle('hidden', mode !== G357.MODE_AI);
     startNewGame();
   }
 
@@ -312,6 +309,7 @@
 
   // ---- 重新开始 ----
   function startNewGame() {
+    gameToken += 1;
     busy = false;
     selection = null;
     hintActive = false;
@@ -321,6 +319,25 @@
     renderBoard();
     updateTurnBanner();
     updateControls();
+    // AI 先手：电脑走第一手（currentPlayer 刚改为 PLAYER_2，需重刷轮次与按钮态）
+    if (game.mode === G357.MODE_AI && aiFirstInput.checked) {
+      game.currentPlayer = G357.PLAYER_2;
+      updateTurnBanner();
+      updateControls();
+      scheduleAiFirstMove();
+    }
+  }
+
+  // 电脑先手的第一手：模拟思考后由 AI 落子
+  async function scheduleAiFirstMove() {
+    const token = gameToken;
+    busy = true;
+    turnText.textContent = '🤖 电脑思考中…';
+    updateControls();
+    await delay(AI_THINK_MS);
+    if (token !== gameToken || G357.isOver(game)) return;
+    const move = G357AI.getMove(game);
+    if (move) await takeDice(move.row, move.count);
   }
 
   btnReset.addEventListener('click', startNewGame);
