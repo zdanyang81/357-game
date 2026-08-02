@@ -67,7 +67,8 @@ require('./js/ui.js');
 
 const modePvp = doc.getElementById('mode-pvp');
 const modeAi = doc.getElementById('mode-ai');
-const avatarPanel = doc.getElementById('avatar-panel');
+const avatarP1Side = doc.getElementById('avatar-p1-side');
+const avatarP2Side = doc.getElementById('avatar-p2-side');
 const avatarP1 = doc.getElementById('avatar-p1');
 const avatarP2 = doc.getElementById('avatar-p2');
 const turnText = doc.getElementById('turn-text');
@@ -91,12 +92,14 @@ function clickDie(row, index) {
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 async function main() {
-  // ---- 1. 面板显隐 ----
-  assert.ok(!avatarPanel.classList.contains('hidden'), '默认 PvP 模式首屏形象面板即显示');
+  // ---- 1. 面板显隐（左右两侧同步） ----
+  const sideHidden = () => avatarP1Side.classList.contains('hidden') && avatarP2Side.classList.contains('hidden');
+  const sideShown = () => !avatarP1Side.classList.contains('hidden') && !avatarP2Side.classList.contains('hidden');
+  assert.ok(sideShown(), '默认 PvP 模式首屏形象面板即显示（两侧）');
   modePvp.dispatch('click');
-  assert.ok(!avatarPanel.classList.contains('hidden'), '切 PvP 后形象面板显示');
+  assert.ok(sideShown(), '切 PvP 后形象面板显示');
   modeAi.dispatch('click');
-  assert.ok(avatarPanel.classList.contains('hidden'), '切 AI 后形象面板隐藏');
+  assert.ok(sideHidden(), '切 AI 后形象面板隐藏（两侧）');
   modePvp.dispatch('click');
 
   // ---- 2. 默认选择：玩家一=0 玩家二=3 ----
@@ -134,7 +137,7 @@ async function main() {
   modeAi.dispatch('click');
   assert.ok(turnText.textContent.includes('🙋'), `AI 模式回合条显示 🙋: ${turnText.textContent}`);
   assert.ok(!turnText.textContent.includes('👨\u200d💼'), 'AI 模式回合条不使用 PvP 形象');
-  assert.ok(avatarPanel.classList.contains('hidden'), 'AI 模式形象面板隐藏');
+  assert.ok(sideHidden(), 'AI 模式形象面板隐藏（两侧）');
   // AI 模式走一步，日志保持纯文字（无 🙋 前缀）
   clickDie(0, 0);
   btnConfirm.dispatch('click');
