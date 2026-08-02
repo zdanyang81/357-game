@@ -1,2 +1,5 @@
 .DS_Store
 .chrome-test/
+
+# 外部审核记录（Kimi 等审核产物，不入库）
+.agent/
