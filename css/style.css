@@ -228,10 +228,26 @@ body {
   50% { transform: scale(1.08); }
 }
 
-.die.taken {
-  opacity: 0;
-  transform: scale(0);
-  pointer-events: none;
+/* ===== AI 先手开关 ===== */
+.ai-first-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin: 10px auto 0;
+  font-size: 13px;
+  color: var(--text-dim);
+  cursor: pointer;
+  user-select: none;
+}
+
+/* 通用隐藏（AI 先手开关、胜负横幅等） */
+.hidden {
+  display: none !important;
+}
+
+.ai-first-toggle input {
+  accent-color: var(--gold);
+  cursor: pointer;
 }
 
 /* ===== 操作区 ===== */
