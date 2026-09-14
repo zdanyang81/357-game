@@ -59,11 +59,29 @@ AI 对全部局面（每排 0–7 颗，共 8³ = 512 个状态）用动态规�
 比简单的「异或归零」更准确：misère 规则下存在临界局面（如只剩 `[0,1,2]` 时），
 直接走异或归零会把「偶数个单骰堆」送给对手导致落败，DP 解天然规避了这类陷阱。
 
+## 安卓 App
+
+`android/` 提供一个离线 WebView 壳，把仓库内的 HTML、CSS、JavaScript 和头像资源直接打进 APK，不依赖网络：
+
+```bash
+chmod +x android/build.sh android/host-tests/run.sh
+android/host-tests/run.sh
+android/build.sh
+```
+
+- 包名：`com.zdy.game357`
+- 应用名：`357`
+- 最低 Android 版本：Android 6.0（API 23）
+- APK：`android/build/357-v1.0.0.apk`
+- 签名文件保存在本机 `~/android-apps/357-game/`，不入库；后续版本必须复用同一签名才能覆盖升级。
+
 ## 测试
 
 纯逻辑模块（`js/game.js`、`js/ai.js`）的最小测试，需要 Node.js：
 
 ```bash
-node test.js        # misère 语义 / AI 最优策略 / 走子校验
-node test-race.js   # 竞态回归：AI 思考期间重置不污染新局、AI 先手
+node test.js          # misère 语义 / AI 最优策略 / 走子校验
+node test-race.js     # 竞态回归：AI 思考期间重置不污染新局、AI 先手
+node test-avatar.js   # 形象选择行为
+android/host-tests/run.sh
 ```
