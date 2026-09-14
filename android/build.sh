@@ -77,7 +77,7 @@ fi
 "$BT/apksigner" sign --ks "$KEYSTORE" \
     --ks-pass "pass:$GAME357_KEYSTORE_PASSWORD" \
     --key-pass "pass:$GAME357_KEYSTORE_PASSWORD" \
-    --out "$BUILD/357-v1.0.0.apk" "$BUILD/app-aligned.apk"
-"$BT/apksigner" verify --verbose --print-certs "$BUILD/357-v1.0.0.apk"
-sha256sum "$BUILD/357-v1.0.0.apk"
-echo "BUILD OK: $BUILD/357-v1.0.0.apk"
+    --out "$BUILD/357-v1.0.1.apk" "$BUILD/app-aligned.apk"
+"$BT/apksigner" verify --verbose --print-certs "$BUILD/357-v1.0.1.apk"
+sha256sum "$BUILD/357-v1.0.1.apk"
+echo "BUILD OK: $BUILD/357-v1.0.1.apk"

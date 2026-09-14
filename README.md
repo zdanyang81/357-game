@@ -72,7 +72,7 @@ android/build.sh
 - 包名：`com.zdy.game357`
 - 应用名：`357`
 - 最低 Android 版本：Android 6.0（API 23）
-- APK：`android/build/357-v1.0.0.apk`
+- APK：`android/build/357-v1.0.1.apk`
 - 签名文件保存在本机 `~/android-apps/357-game/`，不入库；后续版本必须复用同一签名才能覆盖升级。
 
 ## 测试
