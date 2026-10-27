@@ -242,17 +242,6 @@ class GameUI {
     this.modal = { type: 'result', page: 0 }; this.render();
   }
 
-  hint() {
-    if (!this.canPlay()) return;
-    try {
-      const choice = engine.chooseMove(this.state.piles.slice(), 'hard');
-      this.assisted = true; this.save();
-      this.openModal({ type: 'hint', page: 0, text: (choice ? '建议从第 ' + (choice.row + 1) +
-        ' 排取 ' + choice.count + ' 颗。\n\n' : '') + engine.explain(this.state.piles.slice()) +
-        '\n\n本局已标为「提示辅助局」，战绩单独注明。' });
-    } catch (error) { this.fail(error); }
-  }
-
   openModal(modal) {
     if (this.destroyed || this.hidden) return;
     this.invalidate(); this.modal = typeof modal === 'string' ? { type: modal, page: 0 } : modal; this.render();
@@ -421,10 +410,10 @@ class GameUI {
     const compact = this.bottom - this.top < 470, step = compact ? 48 : 52;
     let y = this.top + (compact ? 8 : 14);
     this.text('357', w / 2, y + 19, compact ? 34 : 40, GOLD, 'center', 'bold');
-    this.text('经 典 取 骰 策 略', w / 2, y + (compact ? 44 : 51), 12, MUTED, 'center');
+    this.text('经 典 取 骰 游 戏', w / 2, y + (compact ? 44 : 51), 12, MUTED, 'center');
     y += compact ? 56 : 68;
     const modes = [ ['pvp', 'easy', '同屏双人', '与身边的人切磋'], ['ai', 'easy', 'AI · 休闲', '轻松熟悉规则'],
-      ['ai', 'medium', 'AI · 挑战', '多想一步'], ['ai', 'hard', 'AI · 高手', '最优策略对手'] ];
+      ['ai', 'medium', 'AI · 挑战', '多想一步'], ['ai', 'hard', 'AI · 高手', '更高难度对手'] ];
     modes.forEach((item, i) => {
       const bx = x + (i % 2) * (half + 8), by = y + Math.floor(i / 2) * 56;
       const active = this.modeChoice === item[0] && (item[0] === 'pvp' || this.difficultyChoice === item[1]);
@@ -470,28 +459,6 @@ class GameUI {
   }
 
   playerName(player) { return this.state.mode === 'ai' ? (player === 1 ? '电脑' : '你') : (player === 0 ? '玩家一' : '玩家二'); }
-
-  strategyText() {
-    const piles = this.state.piles, xor = piles.reduce((sum, n) => sum ^ n, 0);
-    const binary = n => ('000' + n.toString(2)).slice(-3);
-    const singles = piles.filter(n => n === 1).length, large = piles.filter(n => n > 1).length;
-    let current;
-    if (piles.every(n => n === 0)) current = '棋盘已空，本局结束。';
-    else if (large === 0) current = '当前全是单颗堆，共 ' + singles + ' 堆：' +
-      (singles % 2 ? '奇数堆轮到你是必败局面；一堆时只能取走并输。' : '偶数堆时取一颗，留奇数堆给对手。');
-    else if (large === 1) current = '当前只剩一排大堆，已有 ' + singles + ' 个单颗堆：' +
-      (singles % 2 ? '清空大堆，给对手留下奇数个单颗堆。' : '把大堆取到只剩一颗，给对手留下奇数个单颗堆。');
-    else current = '当前至少两排大于一颗，可以先看异或和，再留意收官例外。';
-    return '当前三排 · 二进制\n' + piles.map((n, i) => '第 ' + (i + 1) + ' 排：' + n + ' = ' + binary(n)).join('\n') +
-      '\n异或和：' + piles.join(' ⊕ ') + ' = ' + xor + ' (' + binary(xor) + ')\n\n' +
-      '异或按二进制逐位计算：相同为 0，不同为 1，不进位。\n\n' +
-      '普通 Nim（拿最后一颗赢）常用异或归零；本游戏是 misère：拿最后一颗输，普通异或不能盲用。\n\n' +
-      '① 全是单颗堆时，每回合只能取一颗。要留奇数个单颗堆给对手；奇数堆轮到自己是必败，偶数堆则可获胜。\n\n' +
-      '② 只剩一排大于一颗时，不再机械归零。把它清空或取到剩一颗，让对手接到奇数个单颗堆。\n\n' +
-      '③ 至少两排大于一颗时，用异或和寻找归零走法；将进入上述收官时，重新检查单颗堆奇偶。\n\n' +
-      current + '\n\n本局建议：' + engine.explain(piles.slice()) +
-      '\n\n对局中阅读局面分析会标为提示辅助局。';
-  }
 
   drawGame() {
     const w = this.width, x = 20, span = w - 40;
@@ -539,20 +506,14 @@ class GameUI {
     });
     y += rowHeight * 3 + 3;
     this.button('cancel', '取消', x, y, 60, 46, () => { this.selected = null; this.render(); }, { disabled: !this.selected || boardDisabled });
-    this.button('confirm', this.selected ? '确认取 ' + this.selected.count + ' 颗' : '确认拿取', x + 68, y, span - 136, 46,
+    this.button('confirm', this.selected ? '确认取 ' + this.selected.count + ' 颗' : '确认拿取', x + 68, y, span - 68, 46,
       () => this.confirmMove(), { primary: true, disabled: !this.selected || boardDisabled });
-    this.button('hint', '提示', w - 80, y, 60, 46, () => this.hint(), { disabled: boardDisabled });
     y += 54;
-    this.button('teaching', '策略课堂', x, y, (span - 8) / 2, 44, () => {
-      let text;
-      try { text = this.strategyText(); } catch (error) { this.lastError = error; text = '先观察局面，再选择一排。'; }
-      if (this.state.winner === null) { this.assisted = true; this.save(); }
-      this.openModal({ type: 'teaching', page: 0, text });
-    });
+    this.button('rules', '游戏规则', x, y, (span - 8) / 2, 44, () => this.openModal('rules'));
     this.button('history', '走子记录 · ' + this.state.history.length, x + (span + 8) / 2, y, (span - 8) / 2, 44,
       () => this.openModal('history'));
     if (y + 61 < this.bottom) this.text(this.storageWarning ? '本地保存失败 · 进度可能无法保留' :
-      this.assisted ? '提示辅助局 · 取最后一颗者输' : '一次只取一排 · 取最后一颗者输', w / 2, y + 59, 10, MUTED, 'center');
+      '一次只取一排 · 取最后一颗者输', w / 2, y + 59, 10, MUTED, 'center');
   }
 
   wrap(text, width, size) {
@@ -574,7 +535,7 @@ class GameUI {
     const h = Math.min(470, this.bottom - this.top - 20), y = this.top + (this.bottom - this.top - h) / 2;
     this.panel(x, y, w, h, '#112e24', '#9c8753', 19);
     const titles = { restore: '发现本地对局', rules: '三句话，开始取骰', stats: '本地战绩', avatars: '选择本地形象',
-      leave: '返回首页？', restart: '重新开始？', hint: '这一手的提示', teaching: '策略课堂', history: '走子记录', result: '本局结束' };
+      leave: '返回首页？', restart: '重新开始？', history: '走子记录', result: '本局结束' };
     this.text(titles[modal.type] || '357', x + 18, y + 30, 19, GOLD, 'left', 'bold', w - 84);
     if (!['restore', 'result'].includes(modal.type))
       this.button('modal-close', '关闭', x + w - 68, y + 9, 56, 44, () => this.closeModal());
@@ -586,7 +547,7 @@ class GameUI {
         actions = [['重新开始', () => { this.resumeCandidate = null; this.startGame(); }], ['继续对局', () => this.restore()]];
         break;
       case 'rules':
-        content = '① 三排骰子分别是 3、5、7 颗。\n\n② 轮流从同一排取走至少 1 颗，可以整排取走，不可跨排。\n\n③ 拿到最后一颗的人输！\n\n点第 N 颗，会选中该排前 N 颗；确认才会真正拿取。取消可以重新选择。\n\n同屏双人轮流操作；AI 有三档难度。所有头像、存档和战绩都留在本机。';
+        content = '① 双方轮流，每回合只能从一排拿至少一颗。\n\n② 拿最后一颗的人输。\n\n③ 点击骰子选中该排前 N 颗，确认拿取 / 取消。';
         break;
       case 'leave':
         content = '当前对局会保留在本机。\n\n返回后可从首页继续，也可选择新开一局。';
@@ -596,22 +557,20 @@ class GameUI {
         content = '将放弃当前棋盘，按相同模式、先手和头像重新开始。\n\n未结束的对局不会计入战绩。';
         actions = [['继续本局', () => this.closeModal()], ['确认重开', () => this.restart()]];
         break;
-      case 'hint': case 'teaching': content = modal.text; break;
       case 'history':
         content = this.state.history.length ? this.state.history.map((step, index) =>
           (index + 1) + '. ' + this.playerName(step.player) + ' · 第' + (step.row + 1) + '排取' + step.count + '颗\n   剩余 ' + step.piles.join(' / ')).join('\n\n') : '还没有落子，第一手由你书写。';
         break;
       case 'stats': {
-        const results = this.stats.results, solo = results.filter(item => item.mode === 'ai' && !item.assisted);
+        const results = this.stats.results, solo = results.filter(item => item.mode === 'ai');
         const wins = solo.filter(item => item.winner === 0).length;
         content = '仅记录本机最近 100 局，终局只计一次。\n' +
-          '共 ' + results.length + ' 局 · 提示辅助 ' + results.filter(item => item.assisted).length + ' 局\n' +
-          '无辅助人机：' + wins + ' 胜 / ' + (solo.length - wins) + ' 负\n\n' +
+          '共 ' + results.length + ' 局\n' +
+          '人机：' + wins + ' 胜 / ' + (solo.length - wins) + ' 负\n\n' +
           (results.length ? results.slice().reverse().map(item => {
             const date = new Date(item.at);
             return (date.getMonth() + 1) + '/' + date.getDate() + ' · ' +
-              (item.mode === 'ai' ? 'AI ' + LEVELS[item.difficulty] + ' · ' + (item.winner === 0 ? '你获胜' : '电脑获胜') : '双人 · 玩家' + (item.winner + 1) + '胜') +
-              (item.assisted ? ' [提示辅助]' : '');
+              (item.mode === 'ai' ? 'AI ' + LEVELS[item.difficulty] + ' · ' + (item.winner === 0 ? '你获胜' : '电脑获胜') : '双人 · 玩家' + (item.winner + 1) + '胜');
           }).join('\n\n') : '暂无战绩。完成第一局试试看。');
         break;
       }
@@ -620,7 +579,7 @@ class GameUI {
         modal.page = 0; modal.pages = 1;
         this.text(this.playerName(this.state.winner) + '获胜！', innerX, y + 76, 22, GOLD, 'left', 'bold', innerW);
         this.text(this.playerName(1 - this.state.winner) + '拿到了最后一颗骰子。', innerX, y + 109, 14, INK, 'left', 'normal', innerW);
-        this.text('共 ' + this.state.history.length + ' 手 · ' + (this.assisted ? '提示辅助局' : '独立思考局'),
+        this.text('共 ' + this.state.history.length + ' 手',
           innerX, y + 136, 14, INK, 'left', 'normal', innerW);
         this.text(this.storageWarning ? '本地保存失败，记录暂留本次运行' : '战绩已计入本机记录。',
           innerX, y + 163, 13, this.storageWarning ? GOLD : MUTED, 'left', 'normal', innerW);
