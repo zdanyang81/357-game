@@ -111,11 +111,11 @@ function withinSafeArea(h, name) {
 function pvp(h) {
   h.ui.startGame({ mode: 'pvp', difficulty: 'hard', aiFirst: false, avatars: [0, 3] });
 }
-function finishPvp(h) {
+function finishPvp(h, winner = 1) {
   for (const row of [0, 1, 2]) {
     h.ui.select(row, h.ui.state.piles[row]); h.ui.confirmMove(); h.flush();
   }
-  assert.equal(h.ui.state.winner, 1); // Third mover takes the last die and loses.
+  assert.equal(h.ui.state.winner, winner); // The player taking the last die loses.
 }
 
 test('exports class directly and by name; constructor validates Canvas', () => {
@@ -240,14 +240,28 @@ test('terminal hide before animation finishes still records exactly once', t => 
   assert.equal(h.ui.modal.type, 'result'); assert.equal(h.ui.stats.results.length, 1);
 });
 
-test('hint and strategy teaching persist assisted classification', t => {
-  for (const kind of ['hint', 'teaching']) {
-    const h = harness(); t.after(() => h.ui.destroy()); pvp(h);
-    h.touch(kind); assert.equal(h.ui.assisted, true); assert.equal(h.data[KEYS.save].assisted, true);
-    h.touch('modal-close'); finishPvp(h);
-    assert.equal(h.ui.stats.results[0].assisted, true);
-    h.ui.openModal('stats'); assert.ok(h.calls.some(call => call.method === 'fillText' && String(call.args[0]).includes('提示辅助')));
-  }
+test('legacy assisted saves and results remain valid without classification labels', t => {
+  const state = engine.move(engine.createGame({ mode: 'pvp', difficulty: 'hard' }), 0, 1);
+  const legacy = { id: 'legacy-result', mode: 'ai', difficulty: 'hard', winner: 0, assisted: true, at: 1 };
+  const data = {
+    [KEYS.save]: { version: 1, id: 'legacy-save', state, assisted: true },
+    [KEYS.stats]: { version: 1, results: [legacy] }
+  };
+  const h = harness({ data });
+  assert.equal(h.ui.modal.type, 'restore'); h.touch('modal-action-1');
+  assert.equal(h.ui.gameId, 'legacy-save'); assert.deepEqual(h.ui.state, state);
+  assert.equal(h.ui.assisted, true); assert.deepEqual(h.ui.stats.results, [legacy]);
+  h.touch('rules'); h.touch('modal-close'); h.ui.save();
+  assert.equal(data[KEYS.save].assisted, true); assert.deepEqual(data[KEYS.save].state, state);
+  h.ui.destroy();
+  const next = harness({ data }); t.after(() => next.ui.destroy()); next.touch('modal-action-1');
+  assert.equal(next.ui.assisted, true); assert.deepEqual(next.ui.state, state);
+  finishPvp(next, 0); assert.equal(next.ui.stats.results.length, 2);
+  next.ui.openModal('stats');
+  const text = next.calls.filter(c => c.method === 'fillText').map(c => c.args[0]).join('\n');
+  assert.doesNotMatch(text, /提示辅助|独立思考|无辅助/);
+  assert.match(text, /人机：1 胜/);
+  assert.deepEqual(data[KEYS.stats].results[0], legacy);
 });
 
 test('corrupt, forged and unsupported saves are safely ignored', t => {
@@ -311,46 +325,62 @@ test('320x568 safe areas, four modes, seven-die single line, and paged overlays 
     for (const die of dice) { if (!rows.has(die[1])) rows.set(die[1], []); rows.get(die[1]).push(die); }
     assert.deepEqual([...rows.values()].map(row => row.length), [3, 5, 7]);
     for (const row of rows.values()) for (const die of row) assert.ok(die[0] >= 20 && die[0] + die[2] <= 300);
-    h.ui.openModal({ type: 'hint', page: 0, text: '长文本分页边界验证。'.repeat(100) });
-    assert.ok(h.ui.modal.pages > 1);
-    while (h.ui.modal.page < h.ui.modal.pages - 1) { withinSafeArea(h, 'long hint'); h.touch('page-next'); }
+    h.ui.stats.results = Array.from({ length: 100 }, (_, i) => ({
+      id: 'result-' + i, mode: 'ai', difficulty: 'hard', winner: i % 2, assisted: i % 2 === 0, at: i
+    }));
+    h.ui.openModal('stats'); assert.ok(h.ui.modal.pages > 1);
+    while (h.ui.modal.page < h.ui.modal.pages - 1) { withinSafeArea(h, 'long stats'); h.touch('page-next'); }
     withinSafeArea(h, 'last page'); h.touch('modal-close');
     for (const modal of ['leave', 'restart', 'history']) { h.ui.openModal(modal); withinSafeArea(h, modal); h.touch('modal-close'); }
     finishPvp(h); withinSafeArea(h, 'result'); assert.equal(h.ui.modal.pages, 1);
   }
 });
 
-test('classroom exposes three binary rows, XOR, misere exceptions and accessible pagination', t => {
-  const h = harness({ safeTop: 84, safeBottom: 34 }); t.after(() => h.ui.destroy()); pvp(h); h.touch('teaching');
-  assert.match(h.ui.modal.text, /第 1 排：3 = 011/);
-  assert.match(h.ui.modal.text, /第 2 排：5 = 101/);
-  assert.match(h.ui.modal.text, /第 3 排：7 = 111/);
-  assert.match(h.ui.modal.text, /异或和：3 ⊕ 5 ⊕ 7 = 1 \(001\)/);
-  for (const phrase of ['misère', '普通异或不能盲用', '全是单颗堆', '只剩一排大于一颗', '奇数个单颗堆'])
-    assert.ok(h.ui.modal.text.includes(phrase), phrase);
-  assert.ok(h.ui.modal.pages > 1); let visited = 1;
-  while (h.ui.modal.page < h.ui.modal.pages - 1) {
-    withinSafeArea(h, 'classroom page'); h.touch('page-next'); visited++;
-  }
-  assert.equal(visited, h.ui.modal.pages); withinSafeArea(h, 'last classroom page');
-  h.touch('modal-close');
-  // Derive actual late-game positions, do not forge state shapes.
-  for (const [row, count] of [[0, 3], [1, 4], [2, 5]]) {
-    h.ui.select(row, count); h.ui.confirmMove(); h.flush();
-  }
-  assert.deepEqual(h.ui.state.piles, [0, 1, 2]);
-  assert.match(h.ui.strategyText(), /当前只剩一排大堆，已有 1 个单颗堆：清空大堆/);
-  h.ui.select(2, 1); h.ui.confirmMove(); h.flush();
-  assert.match(h.ui.strategyText(), /当前全是单颗堆，共 2 堆：偶数堆时取一颗/);
-  h.ui.select(1, 1); h.ui.confirmMove(); h.flush();
-  assert.match(h.ui.strategyText(), /当前全是单颗堆，共 1 堆：奇数堆轮到你是必败/);
+test('home and game share fixed single-page rules without changing a selected position', t => {
+  const h = harness({ safeTop: 84, safeBottom: 34 }); t.after(() => h.ui.destroy());
+  const readRules = () => {
+    h.calls.length = 0; h.touch('rules');
+    assert.equal(h.ui.modal.type, 'rules'); assert.equal(h.ui.modal.pages, 1);
+    assert.equal(h.ui.modal.page, 0); assert.ok(h.ui.hitBoxes.every(b => !b.id.startsWith('page-')));
+    withinSafeArea(h, 'single-page rules');
+    const dim = h.calls.findLastIndex(c => c.method === 'fillRect' && c.args[2] === 320 && c.args[3] === 568);
+    return h.calls.slice(dim + 1).filter(c => c.method === 'fillText').map(c => c.args[0]).join('');
+  };
+  const homeRules = readRules();
+  for (const phrase of ['双方轮流', '每回合只能从一排拿至少一颗', '拿最后一颗的人输', '点击骰子选中该排前 N 颗', '确认拿取 / 取消'])
+    assert.ok(homeRules.includes(phrase), phrase);
+  h.touch('modal-close'); pvp(h); h.die(1, 3);
+  const state = copy(h.ui.state), selected = copy(h.ui.selected), saved = copy(h.data[KEYS.save]);
+  const id = h.ui.gameId;
+  const cancel = h.ui.hitBoxes.find(b => b.id === 'cancel'), confirm = h.ui.hitBoxes.find(b => b.id === 'confirm');
+  assert.equal(cancel.y, confirm.y); assert.ok(confirm.w > cancel.w * 2);
+  assert.equal(readRules(), homeRules); h.ui.select(0, 1); h.touch('modal-close');
+  assert.deepEqual(h.ui.state, state); assert.deepEqual(h.ui.selected, selected);
+  assert.deepEqual(h.data[KEYS.save], saved); assert.equal(h.ui.gameId, id);
+  assert.equal(h.ui.assisted, false); assert.equal(h.ui.stats.results.length, 0); assert.equal(h.timers.size, 0);
+  h.touch('confirm'); h.flush(); assert.deepEqual(h.ui.state.piles, [3, 2, 7]);
+});
+
+test('all reachable UI excludes strategy explanations, recommendations and assistance labels', t => {
+  const h = harness(); t.after(() => h.ui.destroy());
+  assert.equal(typeof h.ui.hint, 'undefined'); assert.equal(typeof h.ui.strategyText, 'undefined');
+  for (const type of ['rules', 'stats']) { h.touch(type); h.touch('modal-close'); }
+  pvp(h);
+  assert.ok(h.ui.hitBoxes.every(b => !['hint', 'teaching'].includes(b.id)));
+  for (const type of ['rules', 'history', 'restart', 'leave']) { h.touch(type === 'leave' ? 'back' : type); h.touch('modal-close'); }
+  // Removed modal types cannot display even externally supplied strategy text.
+  for (const type of ['hint', 'teaching']) { h.ui.openModal({ type, text: '推荐走法：策略课堂' }); h.touch('modal-close'); }
+  finishPvp(h); h.touch('result-home'); h.touch('stats');
+  const text = h.calls.filter(c => c.method === 'fillText').map(c => c.args[0]).join('\n');
+  assert.doesNotMatch(text, /二进制|异或|必胜|必败|算法|推荐走法|建议从|课堂|策略|提示辅助|独立思考|无辅助|misère|Nim/);
 });
 
 test('narrow result draws every status directly, never creates unreachable pages', t => {
   for (const safeTop of [84, 88]) for (const assisted of [false, true]) for (const failed of [false, true]) {
     const h = harness({ safeTop, safeBottom: 34, storageFailure: failed ? 'false' : undefined });
     t.after(() => h.ui.destroy()); pvp(h);
-    if (assisted) { h.ui.hint(); h.ui.closeModal(); }
+    // Simulate the internal flag restored from an older saved game.
+    h.ui.assisted = assisted;
     finishPvp(h);
     h.ui.shareStatus = '分享未完成，可稍后再试'; h.calls.length = 0; h.ui.render();
     assert.equal(h.ui.modal.page, 0); assert.equal(h.ui.modal.pages, 1);
@@ -359,7 +389,8 @@ test('narrow result draws every status directly, never creates unreachable pages
     // Only inspect overlay draws after its full-screen dim rectangle.
     const dimIndex = h.calls.findLastIndex(c => c.method === 'fillRect' && c.args[0] === 0 && c.args[1] === 0 && c.args[2] === 320 && c.args[3] === 568);
     const text = h.calls.slice(dimIndex + 1).filter(c => c.method === 'fillText');
-    for (const phrase of ['玩家二获胜', '玩家一拿到了最后一颗', assisted ? '提示辅助局' : '独立思考局',
+    assert.ok(text.every(c => !/提示辅助|独立思考/.test(String(c.args[0]))));
+    for (const phrase of ['玩家二获胜', '玩家一拿到了最后一颗', '共 3 手',
       failed ? '本地保存失败' : '战绩已计入', '分享未完成']) assert.ok(text.some(c => String(c.args[0]).includes(phrase)), phrase);
     const firstAction = h.ui.hitBoxes.find(b => b.id === 'again');
     for (const line of text.filter(c => !['本局结束', '再来一局', '分享这次挑战', '返回首页'].includes(c.args[0]))) {
