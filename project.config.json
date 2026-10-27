@@ -1,0 +1,15 @@
+{
+  "description": "357 经典取骰策略 · 微信小游戏开发版",
+  "projectname": "357-wechat-minigame",
+  "compileType": "minigame",
+  "miniprogramRoot": "minigame/",
+  "appid": "touristappid",
+  "setting": {
+    "es6": true,
+    "minified": true,
+    "urlCheck": true
+  },
+  "packOptions": {
+    "ignore": []
+  }
+}
