@@ -75,6 +75,16 @@ android/build.sh
 - APK：`android/build/357-v1.0.1.apk`
 - 签名文件保存在本机 `~/android-apps/357-game/`，不入库；后续版本必须复用同一签名才能覆盖升级。
 
+## 微信小游戏（开发版）
+
+`minigame/` 新增原生 Canvas 微信小游戏端：融合三档人机、电脑先手、简短规则、同屏双人、六个本地头像、音效/震动、本地存档战绩和自愿分享。原网页/安卓 1.0.1 未改动。
+
+在微信开发者工具导入仓库根目录，项目配置指向 `minigame/`。默认 AppID 为开发占位，正式预览/上传需真实小游戏账号。**尚未微信真机验收或提审上线**；主体资质与平台要求需核实。
+
+详细结构、测试、导入步骤和验收清单见 [微信小游戏说明](docs/wechat-minigame.md)；已验证内容与未发布边界见 [开发验收记录](docs/wechat-acceptance.md)。
+
+微信版一键回归：`bash scripts/test-minigame.sh`。不需要安装 npm 依赖。
+
 ## 测试
 
 纯逻辑模块（`js/game.js`、`js/ai.js`）的最小测试，需要 Node.js：

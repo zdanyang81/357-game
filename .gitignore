@@ -4,3 +4,8 @@ android/build/
 
 # 外部审核记录（Kimi 等审核产物，不入库）
 .agent/
+
+# Local WeChat identity and generated development previews
+project.private.config.json
+artifacts/
+.dsh-vision-toolkit/
