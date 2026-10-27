@@ -4,7 +4,7 @@ const path = require('node:path');
 const assert = require('node:assert/strict');
 const root = path.resolve(__dirname, '..');
 const config = JSON.parse(fs.readFileSync(path.join(root, 'project.config.json'), 'utf8'));
-assert.equal(config.compileType, 'minigame');
+assert.equal(config.compileType, 'game', 'Mac RC 2.02.2607271 requires the game project type');
 assert.equal(config.miniprogramRoot, 'minigame/');
 const privatePath = path.join(root, 'project.private.config.json');
 const local = fs.existsSync(privatePath) ? JSON.parse(fs.readFileSync(privatePath, 'utf8')) : {};
