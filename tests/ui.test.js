@@ -74,8 +74,9 @@ function harness(options = {}) {
       assert.ok(strip);
       const size = Math.min(50, (platform.width - 40 - 12 - 5 * 6) / 7);
       const initial = [3, 5, 7][row], total = initial * size + (initial - 1) * 5;
-      const first = initial - ui.state.piles[row];
-      const x = (platform.width - total) / 2 + (first + count - 1) * (size + 5) + size / 2;
+      const [lo, hi] = ui.rowSpans()[row];
+      const position = ui.state.currentPlayer === 0 ? lo + count - 1 : hi - count;
+      const x = (platform.width - total) / 2 + position * (size + 5) + size / 2;
       this.emit('touch', { x, y: strip.y + strip.h / 2 });
     },
     step() {
@@ -383,7 +384,7 @@ test('home and game share fixed single-page rules without changing a selected po
     return h.calls.slice(dim + 1).filter(c => c.method === 'fillText').map(c => c.args[0]).join('');
   };
   const homeRules = readRules();
-  for (const phrase of ['双方轮流', '每回合只能从一排拿至少一颗', '拿最后一颗的人输', '点击骰子选中该排前 N 颗', '确认拿取 / 取消'])
+  for (const phrase of ['双方轮流', '每回合只能从一排拿至少一颗', '拿最后一颗的人输', '左边的一方从左往右拿', '右边的一方从右往左拿', '确认拿取 / 取消'])
     assert.ok(homeRules.includes(phrase), phrase);
   h.touch('modal-close'); pvp(h); h.die(1, 3);
   const state = copy(h.ui.state), selected = copy(h.ui.selected), saved = copy(h.data[KEYS.save]);
@@ -459,42 +460,71 @@ test('actual move animation highlights, rises and fades frame by frame; not only
   assert.equal(h.ctx.globalAlpha, 1); assert.equal(h.depth, 0);
 });
 
-test('the dice taken are exactly the highlighted ones; the rest keep their place and faces', t => {
-  const h = harness(); t.after(() => h.ui.destroy()); pvp(h);
-  const originalDice = h.ui.dice;
-  const capture = () => {
-    const dice = [];
-    h.ui.dice = function (...args) {
-      dice.push({ x: args[0], y: args[1], value: args[3], selected: args[4], ghost: args[5] });
-      return originalDice.apply(this, args);
-    };
-    h.ui.render(); h.ui.dice = originalDice;
-    return dice;
-  };
-  const row2 = dice => {
-    const ys = [...new Set(dice.map(d => d.y))].sort((a, b) => a - b);
-    return dice.filter(d => d.y === ys[2]);
-  };
-  h.die(2, 3);
-  const before = row2(capture());
-  const picked = before.filter(d => d.selected).map(d => d.x);
-  assert.equal(picked.length, 3);
-  const overlays = [];
+function boardDice(h) {
+  const originalDice = h.ui.dice, dice = [];
+  assert.equal(h.ui.motion, null, 'inspect the board between animations');
   h.ui.dice = function (...args) {
-    if (this.motion && args[4] && !args[5]) overlays.push(args[0]);
+    dice.push({ x: args[0], y: args[1], value: args[3], selected: args[4], ghost: args[5] });
     return originalDice.apply(this, args);
   };
-  h.touch('confirm'); h.flush(); h.ui.dice = originalDice;
-  assert.deepEqual([...new Set(overlays)].sort((a, b) => a - b), picked, 'animation lifts the highlighted dice');
-  const after = row2(capture());
-  assert.deepEqual(after.filter(d => d.ghost).map(d => d.x), picked, 'empty slots are where the picked dice were');
-  const kept = before.filter(d => !d.selected), remaining = after.filter(d => !d.ghost);
-  assert.deepEqual(remaining.map(d => [d.x, d.value]), kept.map(d => [d.x, d.value]));
-  h.die(2, 1); assert.deepEqual(h.ui.selected, { row: 2, count: 1 });
-  const next = row2(capture()).filter(d => d.selected).map(d => d.x);
-  assert.deepEqual(next, [kept[0].x], 'the next pick starts at the first remaining die');
-  h.emit('touch', { x: picked[0] + 2, y: h.ui.hitBoxes.find(b => b.id === 'row-2').y + 20 });
-  assert.deepEqual(h.ui.selected, { row: 2, count: 1 }, 'tapping an empty slot changes nothing');
+  h.ui.render(); h.ui.dice = originalDice;
+  const ys = [...new Set(dice.map(d => d.y))].sort((a, b) => a - b);
+  return ys.map(y => dice.filter(d => d.y === y));
+}
+
+function liftedDice(h, act) {
+  const originalDice = h.ui.dice, lifted = new Set();
+  h.ui.dice = function (...args) {
+    if (this.motion && args[4] && !args[5]) lifted.add(args[0]);
+    return originalDice.apply(this, args);
+  };
+  act(); h.flush(); h.ui.dice = originalDice;
+  return [...lifted].sort((a, b) => a - b);
+}
+
+test('each side picks and takes from its own end; the dice taken are exactly the highlighted ones', t => {
+  const h = harness(); t.after(() => h.ui.destroy()); pvp(h);
+  const positions = row => row.map((d, i) => d.selected ? i : -1).filter(i => i >= 0);
+  const ghosts = row => row.map((d, i) => d.ghost ? i : -1).filter(i => i >= 0);
+  h.die(2, 3);
+  const start = boardDice(h)[2];
+  assert.deepEqual(positions(start), [0, 1, 2], 'left player highlights from the left');
+  const lifted = liftedDice(h, () => h.touch('confirm'));
+  assert.deepEqual(lifted, [0, 1, 2].map(i => start[i].x), 'animation lifts the highlighted dice');
+  let row = boardDice(h)[2];
+  assert.deepEqual(ghosts(row), [0, 1, 2], 'empty slots are where the picked dice were');
+  assert.equal(h.ui.state.currentPlayer, 1);
+  h.die(2, 2);
+  assert.deepEqual(positions(boardDice(h)[2]), [5, 6], 'right player highlights from the right');
+  h.emit('touch', { x: row[3].x + 2, y: h.ui.hitBoxes.find(b => b.id === 'row-2').y + 20 });
+  assert.deepEqual(h.ui.selected, { row: 2, count: 4 }, 'right player tapping the leftmost remaining die takes all four');
+  h.die(2, 2); liftedDice(h, () => h.touch('confirm'));
+  row = boardDice(h)[2];
+  assert.deepEqual(ghosts(row), [0, 1, 2, 5, 6]);
+  assert.deepEqual(row.filter(d => !d.ghost).map(d => [d.x, d.value]), [3, 4].map(i => [start[i].x, start[i].value]),
+    'remaining dice keep their place and faces');
+  h.emit('touch', { x: row[0].x + 2, y: h.ui.hitBoxes.find(b => b.id === 'row-2').y + 20 });
+  assert.equal(h.ui.selected, null, 'tapping an empty slot changes nothing');
+  h.die(2, 1); assert.deepEqual(positions(boardDice(h)[2]), [3], 'left player resumes at the first remaining die');
+});
+
+test('the computer takes from the right end, and restored games redraw both ends', t => {
+  const h = harness();
+  h.ui.startGame({ mode: 'ai', difficulty: 'hard', aiFirst: true, avatars: [0, 3] });
+  h.flush();
+  const aiStep = h.ui.state.history[0];
+  assert.equal(aiStep.player, 1);
+  const initial = [3, 5, 7][aiStep.row];
+  const aiRow = boardDice(h)[aiStep.row];
+  assert.deepEqual(aiRow.map((d, i) => d.ghost ? i : -1).filter(i => i >= 0),
+    Array.from({ length: aiStep.count }, (_, k) => initial - aiStep.count + k), 'computer empties the right end');
+  const row = aiStep.row === 2 ? 1 : 2;
+  h.die(row, 1); h.touch('confirm'); h.flush();
+  const before = boardDice(h).map(r => r.map(d => [d.value, d.ghost]));
+  h.emit('hide'); h.ui.destroy();
+  const next = harness({ data: h.data }); t.after(() => next.ui.destroy());
+  next.touch('modal-action-1');
+  assert.deepEqual(boardDice(next).map(r => r.map(d => [d.value, d.ghost])), before);
 });
 
 test('tall screens use larger dice and center content instead of leaving the bottom empty', t => {
