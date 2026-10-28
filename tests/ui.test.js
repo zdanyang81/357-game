@@ -11,7 +11,8 @@ const copy = value => value === undefined ? undefined : JSON.parse(JSON.stringif
 
 function harness(options = {}) {
   const data = options.data || {};
-  const calls = [], timers = new Map(), listeners = { touch: new Set(), hide: new Set(), show: new Set() };
+  const calls = [], timers = new Map();
+  const listeners = { touch: new Set(), touchStart: new Set(), touchCancel: new Set(), hide: new Set(), show: new Set() };
   const alphaStack = [];
   let serial = 0, clock = 0, depth = 0, sound = 0, vibration = 0, share = 0, alpha = 1;
   const ctx = {
@@ -28,7 +29,7 @@ function harness(options = {}) {
     set(value) { alpha = value; calls.push({ method: 'globalAlpha', args: [value] }); }
   });
   for (const method of ['clearRect', 'fillRect', 'beginPath', 'moveTo', 'lineTo',
-    'quadraticCurveTo', 'closePath', 'fill', 'stroke', 'arc', 'translate', 'scale']) {
+    'quadraticCurveTo', 'closePath', 'fill', 'stroke', 'arc', 'translate', 'scale', 'rotate', 'strokeText']) {
     ctx[method] = (...args) => calls.push({ method, args });
   }
   // roundRect deliberately does not exist: older Mini Game Canvas must work.
@@ -50,9 +51,11 @@ function harness(options = {}) {
       }
     },
     sound() { sound++; }, vibrate() { vibration++; }, share() { share++; },
-    onTouch: register('touch'), onHide: register('hide'), onShow: register('show'),
+    onTouch: register('touch'), onTouchStart: register('touchStart'), onTouchCancel: register('touchCancel'),
+    onHide: register('hide'), onShow: register('show'),
     setTimeout(fn, delay) { const id = ++serial; timers.set(id, { fn, due: clock + delay }); return id; },
-    clearTimeout(id) { timers.delete(id); }
+    clearTimeout(id) { timers.delete(id); },
+    now() { return clock; }
   };
   const ui = new GameUI(platform);
   const h = {
@@ -60,17 +63,20 @@ function harness(options = {}) {
     get depth() { return depth; },
     get feedback() { return { sound, vibration, share }; },
     emit(type, value) { [...listeners[type]].forEach(fn => fn(value)); },
-    touch(id) {
+    center(id) {
       const box = ui.hitBoxes.find(item => item.id === id);
       assert.ok(box, 'missing hit target ' + id);
-      this.emit('touch', { x: box.x + box.w / 2, y: box.y + box.h / 2 });
+      return { x: box.x + box.w / 2, y: box.y + box.h / 2 };
     },
+    touch(id) { this.emit('touch', this.center(id)); },
     die(row, count) {
       const strip = ui.hitBoxes.find(item => item.id === 'row-' + row);
       assert.ok(strip);
-      const size = Math.min(36, (platform.width - 40 - 12 - 5 * 6) / 7);
+      const size = Math.min(50, (platform.width - 40 - 12 - 5 * 6) / 7);
       const initial = [3, 5, 7][row], total = initial * size + (initial - 1) * 5;
-      const x = (platform.width - total) / 2 + (count - 1) * (size + 5) + size / 2;
+      const [lo, hi] = ui.rowSpans()[row];
+      const position = ui.state.currentPlayer === 0 ? lo + count - 1 : hi - count;
+      const x = (platform.width - total) / 2 + position * (size + 5) + size / 2;
       this.emit('touch', { x, y: strip.y + strip.h / 2 });
     },
     step() {
@@ -227,9 +233,40 @@ test('terminal result is counted once across finish, hide/show, and restored pro
   assert.equal(h.ui.stats.results[0].assisted, false); assert.equal(h.ui.modal.type, 'result');
   for (let i = 0; i < 5; i++) { h.ui.finish(); h.emit('hide'); h.emit('show'); }
   assert.equal(h.ui.stats.results.length, 1); withinSafeArea(h, 'terminal');
+  assert.equal(h.data[KEYS.save], null, 'a finished game clears its resumable save');
   h.ui.destroy(); const next = harness({ data: h.data }); t.after(() => next.ui.destroy());
-  next.touch('modal-action-1'); assert.equal(next.ui.state.winner, 1); assert.equal(next.ui.stats.results.length, 1);
-  next.touch('again'); assert.equal(next.ui.stats.results.length, 1); assert.equal(next.ui.state.winner, null);
+  assert.equal(next.ui.modal, null); assert.equal(next.ui.resumeCandidate, null);
+  assert.equal(next.ui.stats.results.length, 1);
+  next.touch('start'); assert.equal(next.ui.stats.results.length, 1);
+  assert.equal(next.ui.state.winner, null); assert.equal(next.ui.state.history.length, 0);
+});
+
+test('finished games are never offered as "continue": home, relaunch and legacy terminal saves', t => {
+  const h = harness(); pvp(h); finishPvp(h); h.touch('result-home');
+  assert.equal(h.ui.resumeCandidate, null); h.touch('start');
+  assert.equal(h.ui.modal, null); assert.equal(h.ui.screen, 'game'); assert.equal(h.ui.state.history.length, 0);
+  h.ui.destroy();
+  let state = engine.createGame({ mode: 'pvp', difficulty: 'hard' });
+  for (const row of [0, 1, 2]) state = engine.move(state, row, state.piles[row]);
+  assert.ok(engine.validateState(state)); assert.notEqual(state.winner, null);
+  const legacy = harness({ data: { [KEYS.save]: { version: 1, id: 'old-finished', state, assisted: false } } });
+  t.after(() => legacy.ui.destroy());
+  assert.equal(legacy.ui.modal, null); assert.equal(legacy.ui.resumeCandidate, null);
+  legacy.touch('start'); assert.equal(legacy.ui.screen, 'game'); assert.equal(legacy.ui.state.winner, null);
+});
+
+test('press highlights its target; sliding off or cancelling before release does not tap', t => {
+  const h = harness(); t.after(() => h.ui.destroy());
+  h.emit('touchStart', h.center('start')); assert.equal(h.ui.pressed, 'start');
+  h.emit('touch', h.center('rules'));
+  assert.equal(h.ui.pressed, null); assert.equal(h.ui.modal, null); assert.equal(h.ui.screen, 'home');
+  h.emit('touchStart', h.center('start')); h.emit('touchCancel');
+  assert.equal(h.ui.pressed, null); assert.equal(h.ui.screen, 'home');
+  h.emit('touchStart', h.center('start')); h.emit('touch', h.center('start'));
+  assert.equal(h.ui.screen, 'game'); assert.equal(h.ui.pressed, null);
+  h.emit('touchStart', h.center('confirm')); assert.equal(h.ui.pressed, null, 'disabled targets never look pressed');
+  h.emit('touch', h.center('confirm')); assert.equal(h.ui.state.history.length, 0);
+  assert.equal(h.depth, 0);
 });
 
 test('terminal hide before animation finishes still records exactly once', t => {
@@ -347,7 +384,7 @@ test('home and game share fixed single-page rules without changing a selected po
     return h.calls.slice(dim + 1).filter(c => c.method === 'fillText').map(c => c.args[0]).join('');
   };
   const homeRules = readRules();
-  for (const phrase of ['双方轮流', '每回合只能从一排拿至少一颗', '拿最后一颗的人输', '点击骰子选中该排前 N 颗', '确认拿取 / 取消'])
+  for (const phrase of ['双方轮流', '每回合只能从一排拿至少一颗', '拿最后一颗的人输', '左边的一方从左往右拿', '右边的一方从右往左拿', '确认拿取 / 取消'])
     assert.ok(homeRules.includes(phrase), phrase);
   h.touch('modal-close'); pvp(h); h.die(1, 3);
   const state = copy(h.ui.state), selected = copy(h.ui.selected), saved = copy(h.data[KEYS.save]);
@@ -400,24 +437,108 @@ test('narrow result draws every status directly, never creates unreachable pages
   }
 });
 
-test('actual move animation highlights, rises and fades over six frames; not only a phase lock', t => {
+test('actual move animation highlights, rises and fades frame by frame; not only a phase lock', t => {
   const h = harness(); t.after(() => h.ui.destroy()); pvp(h); h.ui.select(0, 2);
   const originalDice = h.ui.dice, overlays = [];
   h.ui.dice = function (...args) {
-    if (this.motion && args[4]) overlays.push({ frame: this.motion.frame, x: args[0], y: args[1], alpha: h.ctx.globalAlpha });
+    if (this.motion && args[4]) overlays.push({ progress: this.motion.progress, x: args[0], y: args[1], alpha: h.ctx.globalAlpha });
     return originalDice.apply(this, args);
   };
   h.ui.confirmMove(); assert.equal(h.ui.phase, 'animating'); assert.equal(h.ui.state.history.length, 1);
+  assert.ok([...h.timers.values()].every(timer => timer.due <= 16), 'frames are scheduled at display rate');
   h.flush(); h.ui.dice = originalDice;
   assert.equal(h.ui.motion, null); assert.equal(h.ui.phase, 'idle'); assert.equal(h.ui.state.history.length, 1);
-  const first = overlays.filter(o => o.frame === 0), last = overlays.filter(o => o.frame === 5);
+  const progress = [...new Set(overlays.map(o => o.progress))];
+  assert.equal(progress[0], 0); assert.ok(progress.length >= 10, 'smooth animation draws many frames');
+  for (let i = 1; i < progress.length; i++) assert.ok(progress[i] > progress[i - 1] && progress[i] < 1);
+  const first = overlays.filter(o => o.progress === 0), last = overlays.filter(o => o.progress === progress.at(-1));
   assert.equal(first.length, 2); assert.equal(last.length, 2);
   for (let i = 0; i < first.length; i++) {
-    assert.equal(first[i].alpha, 1); assert.ok(last[i].alpha > 0 && last[i].alpha < first[i].alpha);
-    assert.equal(last[i].y, first[i].y - 10); assert.equal(last[i].x, first[i].x);
+    assert.equal(first[i].alpha, 1); assert.ok(last[i].alpha >= 0 && last[i].alpha < 0.1);
+    assert.ok(last[i].y < first[i].y - 10); assert.equal(last[i].x, first[i].x);
   }
-  assert.deepEqual([...new Set(overlays.map(o => o.frame))], [0, 1, 2, 3, 4, 5]);
   assert.equal(h.ctx.globalAlpha, 1); assert.equal(h.depth, 0);
+});
+
+function boardDice(h) {
+  const originalDice = h.ui.dice, dice = [];
+  assert.equal(h.ui.motion, null, 'inspect the board between animations');
+  h.ui.dice = function (...args) {
+    dice.push({ x: args[0], y: args[1], value: args[3], selected: args[4], ghost: args[5] });
+    return originalDice.apply(this, args);
+  };
+  h.ui.render(); h.ui.dice = originalDice;
+  const ys = [...new Set(dice.map(d => d.y))].sort((a, b) => a - b);
+  return ys.map(y => dice.filter(d => d.y === y));
+}
+
+function liftedDice(h, act) {
+  const originalDice = h.ui.dice, lifted = new Set();
+  h.ui.dice = function (...args) {
+    if (this.motion && args[4] && !args[5]) lifted.add(args[0]);
+    return originalDice.apply(this, args);
+  };
+  act(); h.flush(); h.ui.dice = originalDice;
+  return [...lifted].sort((a, b) => a - b);
+}
+
+test('each side picks and takes from its own end; the dice taken are exactly the highlighted ones', t => {
+  const h = harness(); t.after(() => h.ui.destroy()); pvp(h);
+  const positions = row => row.map((d, i) => d.selected ? i : -1).filter(i => i >= 0);
+  const ghosts = row => row.map((d, i) => d.ghost ? i : -1).filter(i => i >= 0);
+  h.die(2, 3);
+  const start = boardDice(h)[2];
+  assert.deepEqual(positions(start), [0, 1, 2], 'left player highlights from the left');
+  const lifted = liftedDice(h, () => h.touch('confirm'));
+  assert.deepEqual(lifted, [0, 1, 2].map(i => start[i].x), 'animation lifts the highlighted dice');
+  let row = boardDice(h)[2];
+  assert.deepEqual(ghosts(row), [0, 1, 2], 'empty slots are where the picked dice were');
+  assert.equal(h.ui.state.currentPlayer, 1);
+  h.die(2, 2);
+  assert.deepEqual(positions(boardDice(h)[2]), [5, 6], 'right player highlights from the right');
+  h.emit('touch', { x: row[3].x + 2, y: h.ui.hitBoxes.find(b => b.id === 'row-2').y + 20 });
+  assert.deepEqual(h.ui.selected, { row: 2, count: 4 }, 'right player tapping the leftmost remaining die takes all four');
+  h.die(2, 2); liftedDice(h, () => h.touch('confirm'));
+  row = boardDice(h)[2];
+  assert.deepEqual(ghosts(row), [0, 1, 2, 5, 6]);
+  assert.deepEqual(row.filter(d => !d.ghost).map(d => [d.x, d.value]), [3, 4].map(i => [start[i].x, start[i].value]),
+    'remaining dice keep their place and faces');
+  h.emit('touch', { x: row[0].x + 2, y: h.ui.hitBoxes.find(b => b.id === 'row-2').y + 20 });
+  assert.equal(h.ui.selected, null, 'tapping an empty slot changes nothing');
+  h.die(2, 1); assert.deepEqual(positions(boardDice(h)[2]), [3], 'left player resumes at the first remaining die');
+});
+
+test('the computer takes from the right end, and restored games redraw both ends', t => {
+  const h = harness();
+  h.ui.startGame({ mode: 'ai', difficulty: 'hard', aiFirst: true, avatars: [0, 3] });
+  h.flush();
+  const aiStep = h.ui.state.history[0];
+  assert.equal(aiStep.player, 1);
+  const initial = [3, 5, 7][aiStep.row];
+  const aiRow = boardDice(h)[aiStep.row];
+  assert.deepEqual(aiRow.map((d, i) => d.ghost ? i : -1).filter(i => i >= 0),
+    Array.from({ length: aiStep.count }, (_, k) => initial - aiStep.count + k), 'computer empties the right end');
+  const row = aiStep.row === 2 ? 1 : 2;
+  h.die(row, 1); h.touch('confirm'); h.flush();
+  const before = boardDice(h).map(r => r.map(d => [d.value, d.ghost]));
+  h.emit('hide'); h.ui.destroy();
+  const next = harness({ data: h.data }); t.after(() => next.ui.destroy());
+  next.touch('modal-action-1');
+  assert.deepEqual(boardDice(next).map(r => r.map(d => [d.value, d.ghost])), before);
+});
+
+test('tall screens use larger dice and center content instead of leaving the bottom empty', t => {
+  const h = harness({ width: 375, height: 812, safeTop: 84, safeBottom: 34 }); t.after(() => h.ui.destroy());
+  withinSafeArea(h, 'tall home');
+  const homeLast = h.ui.hitBoxes.find(b => b.id === 'stats');
+  assert.ok(h.ui.bottom - (homeLast.y + homeLast.h) < 160, 'home content is vertically centered');
+  pvp(h); withinSafeArea(h, 'tall game');
+  const originalDice = h.ui.dice, sizes = [];
+  h.ui.dice = function (...args) { sizes.push(args[2]); return originalDice.apply(this, args); };
+  h.ui.render(); h.ui.dice = originalDice;
+  assert.ok(sizes.every(size => size > 40), 'dice grow beyond the old 36px cap');
+  const gameLast = h.ui.hitBoxes.find(b => b.id === 'history');
+  assert.ok(h.ui.bottom - (gameLast.y + gameLast.h) < 120, 'board is vertically centered');
 });
 
 test('destroy cancels timers, unsubscribes callbacks, and rejects already queued input', () => {

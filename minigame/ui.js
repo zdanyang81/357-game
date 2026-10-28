@@ -5,6 +5,8 @@ const KEYS = { settings: '357.ui.settings.v1', save: '357.ui.save.v1', stats: '3
 const GOLD = '#d8b674', INK = '#f2ecd9', MUTED = '#9ab4a8';
 const NAMES = ['小狐', '小熊', '小兔', '小猫', '小蛙', '小企鹅'];
 const LEVELS = { easy: '休闲', medium: '挑战', hard: '高手' };
+const MOVE_MS = 260, MOVE_RISE = 14, DIE_MAX = 50, ROW_MAX = 106;
+const easeOut = t => 1 - Math.pow(1 - t, 3);
 const clone = value => JSON.parse(JSON.stringify(value));
 
 /** Canvas coordinates are CSS pixels; platform owns DPR scaling.
@@ -27,11 +29,14 @@ class GameUI {
     this.modal = null; this.motion = null; this.toast = ''; this.shareStatus = '';
     this.lastError = null; this.storageWarning = false;
     this.assisted = false; this.gameId = null; this.serial = 0;
+    this.pressed = null; this.statsDirty = false; this.saveCleared = false; this.bgLayer = undefined;
     this.settings = this.loadSettings();
     this.modeChoice = this.settings.mode; this.difficultyChoice = this.settings.difficulty;
     this.stats = this.loadStats();
     this.resumeCandidate = this.loadSave();
     this.bind('onTouch', point => this.handleTouch(point));
+    this.bind('onTouchStart', point => this.handlePress(point));
+    this.bind('onTouchCancel', () => this.releasePress());
     this.bind('onHide', () => this.onHide());
     this.bind('onShow', () => this.onShow());
     if (this.resumeCandidate) this.modal = { type: 'restore', page: 0 };
@@ -94,6 +99,8 @@ class GameUI {
       if (!value || value.version !== 1 || typeof value.id !== 'string' || value.id.length > 120 ||
           typeof value.assisted !== 'boolean' || !engine.validateState(value.state)) return null;
       const state = value.state;
+      // A finished game is already in the stats ledger and has nothing left to resume.
+      if (state.winner !== null) return null;
       if (!Array.isArray(state.history) || state.history.length > 15) return null;
       // Replay protects even when an engine validator checks only the outer shape.
       let replay = engine.createGame({ mode: state.mode, difficulty: state.difficulty,
@@ -110,10 +117,22 @@ class GameUI {
   }
 
   save() {
-    if (this.state && this.gameId) this.store(KEYS.save, {
-      version: 1, id: this.gameId, state: this.state, assisted: this.assisted
-    });
+    if (!this.state || !this.gameId) return;
+    if (this.state.winner !== null) { this.clearSave(); return; }
+    this.saveCleared = false;
+    this.store(KEYS.save, { version: 1, id: this.gameId, state: this.state, assisted: this.assisted });
   }
+
+  clearSave() {
+    if (this.saveCleared) return;
+    try {
+      const storage = this.platform.storage;
+      const ok = typeof storage.remove === 'function' ? storage.remove(KEYS.save) : storage.set(KEYS.save, null);
+      this.saveCleared = ok !== false;
+    } catch (error) { this.lastError = error; }
+  }
+
+  persistStats() { this.statsDirty = !this.store(KEYS.stats, this.stats); }
 
   feedback() {
     for (const [setting, method] of [['sound', 'sound'], ['vibration', 'vibrate']]) {
@@ -126,22 +145,32 @@ class GameUI {
     }
   }
 
-  later(fn, ms) {
-    const epoch = this.epoch;
-    const schedule = this.platform.setTimeout ? this.platform.setTimeout.bind(this.platform) : setTimeout;
-    const id = schedule(() => {
-      this.timers.delete(id);
+  later(fn, ms) { return this.schedule(fn, ms, false); }
+  nextFrame(fn) { return this.schedule(fn, 16, true); }
+
+  schedule(fn, ms, frame) {
+    const epoch = this.epoch, p = this.platform, handle = {};
+    const run = () => {
+      this.timers.delete(handle);
       if (this.destroyed || this.hidden || epoch !== this.epoch) return;
       try { fn(); } catch (error) { this.fail(error); }
-    }, ms);
-    this.timers.add(id);
-    return id;
+    };
+    if (frame && typeof p.requestAnimationFrame === 'function') {
+      const id = p.requestAnimationFrame(run);
+      handle.cancel = () => p.cancelAnimationFrame(id);
+    } else {
+      const id = (p.setTimeout ? p.setTimeout.bind(p) : setTimeout)(run, ms);
+      handle.cancel = () => (p.clearTimeout ? p.clearTimeout.bind(p) : clearTimeout)(id);
+    }
+    this.timers.add(handle);
+    return handle;
   }
+
+  now() { return typeof this.platform.now === 'function' ? this.platform.now() : Date.now(); }
 
   invalidate() {
     this.epoch += 1;
-    const cancel = this.platform.clearTimeout ? this.platform.clearTimeout.bind(this.platform) : clearTimeout;
-    this.timers.forEach(id => cancel(id));
+    this.timers.forEach(handle => { try { handle.cancel(); } catch (error) { this.lastError = error; } });
     this.timers.clear(); this.locked = false; this.phase = 'idle'; this.motion = null;
   }
 
@@ -207,24 +236,40 @@ class GameUI {
     try { this.commitMove(this.selected.row, this.selected.count); } catch (error) { this.fail(error); }
   }
 
+  // Player one (left panel) takes from the left end of a row, the right side from the right end.
+  // Derived from history so restored games draw the same board without extra saved state.
+  rowSpans(state) {
+    const s = state || this.state, spans = [[0, 3], [0, 5], [0, 7]];
+    for (const step of s.history) {
+      if (step.player === 0) spans[step.row][0] += step.count; else spans[step.row][1] -= step.count;
+    }
+    return spans;
+  }
+
+  pickRange(spans, player, row, count) {
+    const [lo, hi] = spans[row];
+    return player === 0 ? [lo, lo + count] : [hi - count, hi];
+  }
+
   commitMove(row, count) {
-    const oldCount = this.state.piles[row], next = engine.move(this.state, row, count);
+    const range = this.pickRange(this.rowSpans(), this.state.currentPlayer, row, count);
+    const next = engine.move(this.state, row, count);
     // Commit before animation: pause/resume only ever continues from the new position.
     this.state = next; this.selected = null; this.phase = 'animating'; this.locked = true;
-    this.motion = { row, from: next.piles[row], to: oldCount, frame: 0 };
+    this.motion = { row, range, start: this.now(), progress: 0 };
     this.toast = '第 ' + (row + 1) + ' 排取走 ' + count + ' 颗';
     this.feedback(); this.save();
     if (next.winner !== null) this.recordResult();
     this.render();
     const frame = () => {
       if (!this.motion) return;
-      this.motion.frame += 1;
-      if (this.motion.frame < 6) { this.render(); this.later(frame, 40); return; }
+      this.motion.progress = Math.min(1, Math.max(0, (this.now() - this.motion.start) / MOVE_MS));
+      if (this.motion.progress < 1) { this.render(); this.nextFrame(frame); return; }
       this.motion = null; this.locked = false; this.phase = 'idle';
       if (this.state.winner !== null) this.finish();
       else { this.render(); this.scheduleAI(); }
     };
-    this.later(frame, 40);
+    this.nextFrame(frame);
   }
 
   recordResult() {
@@ -233,12 +278,12 @@ class GameUI {
       difficulty: this.state.difficulty, assisted: this.assisted, at: Date.now() };
     // Ledger atomically combines identity and result; no independent win-counter race.
     this.stats = { version: 1, results: this.stats.results.concat(item).slice(-100) };
-    this.store(KEYS.stats, this.stats);
+    this.persistStats();
   }
 
   finish() {
     this.locked = false; this.phase = 'idle'; this.motion = null;
-    this.recordResult(); this.store(KEYS.stats, this.stats); this.save();
+    this.recordResult(); if (this.statsDirty) this.persistStats(); this.save();
     this.modal = { type: 'result', page: 0 }; this.render();
   }
 
@@ -262,7 +307,7 @@ class GameUI {
   onHide() {
     if (this.destroyed) return;
     this.hidden = true; this.invalidate(); this.save();
-    if (this.state && this.state.winner !== null) { this.recordResult(); this.store(KEYS.stats, this.stats); }
+    if (this.state && this.state.winner !== null) { this.recordResult(); if (this.statsDirty) this.persistStats(); }
   }
 
   onShow() {
@@ -279,16 +324,35 @@ class GameUI {
     this.unsubscribers = []; this.hitBoxes = []; this.selected = null;
   }
 
-  handleTouch(point) {
-    if (this.destroyed || this.hidden || !point || !Number.isFinite(point.x) || !Number.isFinite(point.y)) return;
-    const boxes = this.hitBoxes.slice();
-    for (let i = boxes.length - 1; i >= 0; i--) {
-      const box = boxes[i];
-      if (point.x >= box.x && point.x < box.x + box.w && point.y >= box.y && point.y < box.y + box.h) {
-        if (!box.disabled) { try { box.action(point); } catch (error) { this.fail(error); } }
-        return;
-      }
+  boxAt(point) {
+    if (!point || !Number.isFinite(point.x) || !Number.isFinite(point.y)) return null;
+    for (let i = this.hitBoxes.length - 1; i >= 0; i--) {
+      const box = this.hitBoxes[i];
+      if (point.x >= box.x && point.x < box.x + box.w && point.y >= box.y && point.y < box.y + box.h) return box;
     }
+    return null;
+  }
+
+  handlePress(point) {
+    if (this.destroyed || this.hidden) return;
+    const box = this.boxAt(point), id = box && !box.disabled ? box.id : null;
+    if (id !== this.pressed) { this.pressed = id; this.render(); }
+  }
+
+  releasePress() {
+    if (this.pressed === null) return;
+    this.pressed = null; this.render();
+  }
+
+  handleTouch(point) {
+    const pressed = this.pressed;
+    this.pressed = null;
+    if (this.destroyed || this.hidden) return;
+    const box = this.boxAt(point);
+    // A press that slides off its target before release is a cancel, not a tap elsewhere.
+    if (pressed !== null && (!box || box.id !== pressed)) { this.render(); return; }
+    if (box && !box.disabled) { try { box.action(point); } catch (error) { this.fail(error); } }
+    if (pressed !== null) this.render();
   }
 
   hit(id, x, y, w, h, action, disabled) { this.hitBoxes.push({ id, x, y, w, h, action, disabled: !!disabled }); }
@@ -316,9 +380,9 @@ class GameUI {
   }
 
   button(id, label, x, y, w, h, action, options) {
-    const opts = options || {}, disabled = !!opts.disabled;
-    this.panel(x, y, w, h, disabled ? '#1b352e' : opts.primary ? GOLD : '#193e32',
-      disabled ? '#2e493f' : opts.primary ? '#efd397' : '#416250', 11);
+    const opts = options || {}, disabled = !!opts.disabled, pressed = !disabled && this.pressed === id;
+    this.panel(x, y, w, h, disabled ? '#1b352e' : opts.primary ? (pressed ? '#bf9d5c' : GOLD) : pressed ? '#28523f' : '#193e32',
+      disabled ? '#2e493f' : opts.primary ? '#efd397' : pressed ? GOLD : '#416250', 11);
     this.text(label, x + w / 2, y + h / 2, opts.size || 14,
       disabled ? '#789085' : opts.primary ? '#172b23' : INK, 'center', opts.primary ? 'bold' : 'normal', w - 12);
     this.hit(id, x, y, w, h, action, disabled);
@@ -364,6 +428,44 @@ class GameUI {
     this.circle(15, 41, 3, '#cf8b7a'); this.circle(49, 41, 3, '#cf8b7a'); c.restore();
   }
 
+  sparkle(x, y, r, color) {
+    const c = this.ctx;
+    c.beginPath(); c.moveTo(x, y - r);
+    c.quadraticCurveTo(x, y, x + r, y); c.quadraticCurveTo(x, y, x, y + r);
+    c.quadraticCurveTo(x, y, x - r, y); c.quadraticCurveTo(x, y, x, y - r);
+    c.closePath(); c.fillStyle = color; c.fill();
+  }
+
+  // Candy-dice wordmark: three tilted, bobbing tiles with cheeks. Drawn, not a font or image.
+  logo(cx, cy, tile, options) {
+    const c = this.ctx, opts = options || {}, gap = tile * 0.14;
+    const tiles = [['3', '#f2a48f', '#c8705d', -0.14, 0.06], ['5', '#f4d27f', '#c9a04a', 0.06, -0.08],
+      ['7', '#a3d9b6', '#5f9f78', 0.12, 0.04]];
+    const start = cx - (tile * 3 + gap * 2) / 2 + tile / 2;
+    tiles.forEach(([digit, face, edge, tilt, bob], i) => {
+      const x = start + i * (tile + gap), y = cy + bob * tile, half = tile / 2, r = tile * 0.26;
+      c.save(); c.translate(x, y); c.rotate(tilt);
+      this.panel(-half + 1, -half + tile * 0.09, tile - 2, tile, 'rgba(3,18,12,0.55)', null, r);
+      this.panel(-half, -half, tile, tile, face, edge, r);
+      this.panel(-half + tile * 0.14, -half + tile * 0.09, tile * 0.42, tile * 0.13, 'rgba(255,255,255,0.45)', null, tile * 0.07);
+      if (!opts.mini) {
+        this.circle(-half + tile * 0.2, half - tile * 0.24, tile * 0.075, 'rgba(214,96,92,0.45)');
+        this.circle(half - tile * 0.2, half - tile * 0.24, tile * 0.075, 'rgba(214,96,92,0.45)');
+      }
+      c.font = 'bold ' + Math.round(tile * 0.66) + 'px sans-serif';
+      c.textAlign = 'center'; c.textBaseline = 'middle';
+      c.lineJoin = 'round'; c.lineWidth = Math.max(2, tile * 0.1); c.strokeStyle = '#fff7e6';
+      c.strokeText(digit, 0, tile * 0.04); c.fillStyle = '#2f3b32'; c.fillText(digit, 0, tile * 0.04);
+      c.restore();
+    });
+    if (!opts.mini) {
+      const span = tile * 3 + gap * 2;
+      this.sparkle(cx - span / 2 - tile * 0.32, cy - tile * 0.36, tile * 0.16, '#f6dea0');
+      this.sparkle(cx + span / 2 + tile * 0.3, cy - tile * 0.5, tile * 0.11, '#ffffff');
+      this.sparkle(cx + span / 2 + tile * 0.42, cy + tile * 0.12, tile * 0.08, '#f6dea0');
+    }
+  }
+
   dice(x, y, size, value, selected, ghost) {
     const c = this.ctx;
     if (!ghost) this.panel(x + 1, y + 3, size - 2, size - 1, '#09261c', null, 6);
@@ -380,14 +482,32 @@ class GameUI {
     }
   }
 
-  background() {
-    const c = this.ctx;
-    c.clearRect(0, 0, this.width, this.height);
+  paintBackground(c) {
     const g = c.createLinearGradient(0, 0, this.width, this.height);
     g.addColorStop(0, '#153b2d'); g.addColorStop(0.55, '#0b281e'); g.addColorStop(1, '#061a15');
     c.fillStyle = g; c.fillRect(0, 0, this.width, this.height);
     c.fillStyle = 'rgba(202,218,181,0.025)';
     for (let y = 0; y < this.height; y += 9) for (let x = (y % 18 ? 4 : 0); x < this.width; x += 9) c.fillRect(x, y, 1, 1);
+  }
+
+  // The dotted texture costs thousands of fillRect calls, so it is painted once offscreen.
+  backgroundLayer() {
+    if (this.bgLayer !== undefined) return this.bgLayer;
+    this.bgLayer = null;
+    try {
+      if (typeof this.platform.createCanvas !== 'function' || typeof this.ctx.drawImage !== 'function') return null;
+      const dpr = Number(this.platform.dpr) || 1, layer = this.platform.createCanvas();
+      layer.width = Math.round(this.width * dpr); layer.height = Math.round(this.height * dpr);
+      const lc = layer.getContext('2d'); lc.scale(dpr, dpr); this.paintBackground(lc);
+      this.bgLayer = layer;
+    } catch (error) { this.lastError = error; }
+    return this.bgLayer;
+  }
+
+  background() {
+    const c = this.ctx, layer = this.backgroundLayer();
+    c.clearRect(0, 0, this.width, this.height);
+    if (layer) c.drawImage(layer, 0, 0, this.width, this.height); else this.paintBackground(c);
     this.panel(7, this.top, this.width - 14, this.bottom - this.top, 'rgba(0,0,0,0)', '#36513a', 21);
   }
 
@@ -408,18 +528,23 @@ class GameUI {
   drawHome() {
     const w = this.width, x = 20, span = w - 40, half = (span - 8) / 2;
     const compact = this.bottom - this.top < 470, step = compact ? 48 : 52;
-    let y = this.top + (compact ? 8 : 14);
-    this.text('357', w / 2, y + 19, compact ? 34 : 40, GOLD, 'center', 'bold');
-    this.text('经 典 取 骰 游 戏', w / 2, y + (compact ? 44 : 51), 12, MUTED, 'center');
-    y += compact ? 56 : 68;
+    const titleHeight = compact ? 60 : 80;
+    const contentHeight = (compact ? 8 : 14) + titleHeight + 114 + step * 3 + 52 + 44;
+    // Leave room for the status line below the last buttons; center whatever space is left.
+    const spare = this.bottom - this.top - contentHeight - 28;
+    let y = this.top + (compact ? 8 : 14) + Math.max(0, spare / 2);
+    this.logo(w / 2, y + (compact ? 20 : 28), compact ? 36 : 48);
+    this.text('经 典 取 骰 游 戏', w / 2, y + (compact ? 50 : 66), 12, MUTED, 'center');
+    y += titleHeight;
     const modes = [ ['pvp', 'easy', '同屏双人', '与身边的人切磋'], ['ai', 'easy', 'AI · 休闲', '轻松熟悉规则'],
       ['ai', 'medium', 'AI · 挑战', '多想一步'], ['ai', 'hard', 'AI · 高手', '更高难度对手'] ];
     modes.forEach((item, i) => {
       const bx = x + (i % 2) * (half + 8), by = y + Math.floor(i / 2) * 56;
       const active = this.modeChoice === item[0] && (item[0] === 'pvp' || this.difficultyChoice === item[1]);
-      this.panel(bx, by, half, 50, active ? '#31513a' : '#15372b', active ? GOLD : '#3a5544', 12);
+      const pressed = this.pressed === 'mode-' + i;
+      this.panel(bx, by, half, 50, pressed ? '#3a5f45' : active ? '#31513a' : '#15372b', active || pressed ? GOLD : '#3a5544', 12);
       this.text(item[2], bx + 13, by + 16, 15, active ? GOLD : INK, 'left', 'bold');
-      this.text(item[3], bx + 13, by + 37, 11, MUTED);
+      this.text(item[3], bx + 13, by + 37, 12, MUTED, 'left', 'normal', half - 20);
       this.hit('mode-' + i, bx, by, half, 50, () => {
         this.modeChoice = item[0]; this.settings.mode = item[0];
         if (item[0] === 'ai') { this.difficultyChoice = item[1]; this.settings.difficulty = item[1]; }
@@ -433,9 +558,10 @@ class GameUI {
     y += step;
     [0, 1].forEach(player => {
       const bx = x + player * (half + 8);
+      if (this.pressed === 'avatar-' + player) this.panel(bx, y, half, 44, '#1f4636', null, 12);
       this.avatar(this.settings.avatars[player], bx + 2, y, 44);
-      this.text(player === 0 ? '玩家一' : this.modeChoice === 'ai' ? '电脑' : '玩家二', bx + 54, y + 12, 12, INK);
-      this.text('更换形象 ›', bx + 54, y + 33, 11, GOLD);
+      this.text(player === 0 ? '玩家一' : this.modeChoice === 'ai' ? '电脑' : '玩家二', bx + 54, y + 12, 13, INK);
+      this.text('更换形象 ›', bx + 54, y + 33, 12, GOLD);
       this.hit('avatar-' + player, bx, y, half, 44, () => this.openModal({ type: 'avatars', player, page: 0 }));
     });
     y += step;
@@ -449,7 +575,7 @@ class GameUI {
     this.button('rules', '简短规则', x, y, half, 44, () => this.openModal('rules'));
     this.button('stats', '本地战绩', x + half + 8, y, half, 44, () => this.openModal('stats'));
     if ((this.toast || this.storageWarning) && y + 60 < this.bottom)
-      this.text(this.toast || '本地存储不可用，进度可能无法保留', w / 2, y + 58, 10, GOLD, 'center', 'normal', span);
+      this.text(this.toast || '本地存储不可用，进度可能无法保留', w / 2, y + 58, 12, GOLD, 'center', 'normal', span);
   }
 
   toggleSetting(key) {
@@ -462,10 +588,14 @@ class GameUI {
 
   drawGame() {
     const w = this.width, x = 20, span = w - 40;
-    let y = this.top + 10;
+    // Rows grow up to ROW_MAX on tall screens; any height left over centers the whole layout.
+    const gap = 5, size = Math.min(DIE_MAX, (span - 12 - gap * 6) / 7), boardDisabled = !this.canPlay();
+    const available = this.bottom - this.top - 278;
+    const rowHeight = Math.min(Math.max(73, Math.min(ROW_MAX, size + 56)), Math.max(55, available / 3));
+    let y = this.top + 10 + Math.max(0, (available - rowHeight * 3) / 2);
     this.button('back', '返回', x, y, 58, 44, () => this.openModal('leave'));
-    this.text('357', w / 2, y + 15, 24, GOLD, 'center', 'bold');
-    this.text(this.state.mode === 'pvp' ? '同屏双人' : 'AI · ' + LEVELS[this.state.difficulty], w / 2, y + 35, 10, MUTED, 'center');
+    this.logo(w / 2, y + 13, 22, { mini: true });
+    this.text(this.state.mode === 'pvp' ? '同屏双人' : 'AI · ' + LEVELS[this.state.difficulty], w / 2, y + 38, 12, MUTED, 'center');
     this.button('restart', '重开', w - 78, y, 58, 44, () => this.openModal('restart'));
     y += 52;
     const half = (span - 8) / 2;
@@ -474,34 +604,38 @@ class GameUI {
       this.panel(bx, y, half, 58, active ? '#2c4b34' : '#123127', active ? GOLD : '#34513e', 12);
       this.avatar(this.state.avatars[player], bx + 5, y + 7, 43);
       this.text(this.playerName(player), bx + 56, y + 19, 14, active ? GOLD : INK, 'left', 'bold');
-      this.text(active ? '当前回合' : this.state.winner === player ? '获胜' : '等待', bx + 56, y + 40, 11, MUTED);
+      this.text(active ? '当前回合' : this.state.winner === player ? '获胜' : '等待', bx + 56, y + 40, 12, MUTED);
     });
     y += 73;
     const status = this.state.winner !== null ? '本局结束 · 拿最后一颗的人输' : this.phase === 'thinking' ? '电脑正在思考…' :
-      this.phase === 'animating' ? this.toast : this.selected ? '第 ' + (this.selected.row + 1) + ' 排 · 已选前 ' + this.selected.count + ' 颗' :
-      this.playerName(this.state.currentPlayer) + '：点一颗骰子，选中该排前 N 颗';
-    this.text(status, w / 2, y, 12, GOLD, 'center', 'normal', span); y += 17;
+      this.phase === 'animating' ? this.toast : this.selected ? '第 ' + (this.selected.row + 1) + ' 排 · 已选' + (this.state.currentPlayer === 0 ? '左' : '右') + '起 ' + this.selected.count + ' 颗' :
+      this.playerName(this.state.currentPlayer) + '：点一颗骰子，从' + (this.state.currentPlayer === 0 ? '左' : '右') + '边起选 N 颗';
+    this.text(status, w / 2, y, 13, GOLD, 'center', 'normal', span); y += 17;
     // Seven dice remain a single line; full-row hit strips are >=50px tall.
-    const available = this.bottom - y - 126, rowHeight = Math.min(73, Math.max(55, available / 3));
-    const gap = 5, size = Math.min(36, (span - 12 - gap * 6) / 7), boardDisabled = !this.canPlay();
+    const spans = this.rowSpans(), mover = this.state.currentPlayer;
     [3, 5, 7].forEach((initial, row) => {
       const by = y + row * rowHeight;
       this.panel(x, by, span, rowHeight - 5, '#103a29', '#33533d', 12);
       const count = this.state.piles[row], total = initial * size + (initial - 1) * gap;
       const sx = (w - total) / 2, dy = by + (rowHeight - 5 - size) / 2;
+      // Remaining dice keep their positions and faces; taken dice become empty slots on the taker's side.
+      const [lo, hi] = spans[row];
+      const picked = this.selected && this.selected.row === row ? this.pickRange(spans, mover, row, this.selected.count) : null;
       for (let index = 0; index < initial; index++) {
         const dx = sx + index * (size + gap), value = (index + row) % 6 + 1;
-        this.dice(dx, dy, size, value, !!this.selected && this.selected.row === row && index < this.selected.count, index >= count);
-        if (this.motion && this.motion.row === row && index >= this.motion.from && index < this.motion.to) {
-          this.ctx.save(); this.ctx.globalAlpha = 1 - this.motion.frame / 6;
-          this.dice(dx, dy - this.motion.frame * 2, size, value, true, false); this.ctx.restore();
+        const chosen = !!picked && index >= picked[0] && index < picked[1];
+        this.dice(dx, dy, size, value, chosen, index < lo || index >= hi);
+        if (this.motion && this.motion.row === row && index >= this.motion.range[0] && index < this.motion.range[1]) {
+          const t = easeOut(this.motion.progress);
+          this.ctx.save(); this.ctx.globalAlpha = Math.max(0, 1 - t);
+          this.dice(dx, dy - t * MOVE_RISE, size, value, true, false); this.ctx.restore();
         }
       }
       this.hit('row-' + row, x, by, span, rowHeight - 5, point => {
         if (!count) return;
         const index = Math.floor((point.x - sx) / (size + gap));
-        if (index < 0 || index >= count) return;
-        this.select(row, index + 1);
+        if (index < lo || index >= hi) return;
+        this.select(row, mover === 0 ? index - lo + 1 : hi - index);
       }, boardDisabled || count === 0);
     });
     y += rowHeight * 3 + 3;
@@ -513,7 +647,7 @@ class GameUI {
     this.button('history', '走子记录 · ' + this.state.history.length, x + (span + 8) / 2, y, (span - 8) / 2, 44,
       () => this.openModal('history'));
     if (y + 61 < this.bottom) this.text(this.storageWarning ? '本地保存失败 · 进度可能无法保留' :
-      '一次只取一排 · 取最后一颗者输', w / 2, y + 59, 10, MUTED, 'center');
+      '一次只取一排 · 取最后一颗者输', w / 2, y + 59, 12, MUTED, 'center', 'normal', span);
   }
 
   wrap(text, width, size) {
@@ -547,7 +681,7 @@ class GameUI {
         actions = [['重新开始', () => { this.resumeCandidate = null; this.startGame(); }], ['继续对局', () => this.restore()]];
         break;
       case 'rules':
-        content = '① 双方轮流，每回合只能从一排拿至少一颗。\n\n② 拿最后一颗的人输。\n\n③ 点击骰子选中该排前 N 颗，确认拿取 / 取消。';
+        content = '① 双方轮流，每回合只能从一排拿至少一颗。\n\n② 拿最后一颗的人输。\n\n③ 左边的一方从左往右拿，右边的一方从右往左拿：点一颗骰子即选中到它为止的 N 颗，确认拿取 / 取消。';
         break;
       case 'leave':
         content = '当前对局会保留在本机。\n\n返回后可从首页继续，也可选择新开一局。';
@@ -606,7 +740,7 @@ class GameUI {
             this.settings.avatars[modal.player] = index; this.store(KEYS.settings, this.settings); this.closeModal();
           });
         }
-        this.text('选择相同形象会互换 · 仅用于新对局', x + w / 2, bottomY + 20, 11, MUTED, 'center', 'normal', innerW);
+        this.text('选择相同形象会互换 · 仅用于新对局', x + w / 2, bottomY + 20, 12, MUTED, 'center', 'normal', innerW);
         return;
       }
       default: content = '请关闭后重试。';

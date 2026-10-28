@@ -142,9 +142,11 @@ function chooseMove(piles, difficulty = 'hard', rng = Math.random) {
   }
   if (!moves.length) return null;
   // Forced-loss positions retain the reference AI's deterministic one-die fallback.
-  const best = optimal.length ? optimal[0] : moves[0];
-  if (difficulty === 'hard') return best;
-  if (difficulty === 'medium' && randomIndex(10, rng) < 7) return best;
+  // RNG is consumed only to break ties among several winning moves.
+  const best = () => optimal.length > 1 ? optimal[randomIndex(optimal.length, rng)] :
+    optimal.length ? optimal[0] : moves[0];
+  if (difficulty === 'hard') return best();
+  if (difficulty === 'medium' && randomIndex(10, rng) < 7) return best();
   const safe = moves.filter(choice => choice.count !== total(piles));
   // Both easy and medium's random branch avoid taking the last die if possible.
   const candidates = safe.length ? safe : moves;
@@ -155,7 +157,7 @@ function explain(piles) {
   assertPiles(piles);
   if (!total(piles)) return '本局结束：拿走最后一颗的人输。';
   if (total(piles) === 1) return '只剩最后一颗，本轮只能拿走并认输。';
-  const choice = chooseMove(piles);
+  const choice = chooseMove(piles, 'hard', () => 0);
   if (solve(piles)) return `可从第${choice.row + 1}排拿${choice.count}颗，给对手留下必败局面；别拿最后一颗。`;
   return '当前是必败局面，先少拿一颗，等待对手失误；拿最后一颗的人输。';
 }
