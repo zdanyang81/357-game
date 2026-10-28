@@ -236,11 +236,27 @@ class GameUI {
     try { this.commitMove(this.selected.row, this.selected.count); } catch (error) { this.fail(error); }
   }
 
+  // Player one (left panel) takes from the left end of a row, the right side from the right end.
+  // Derived from history so restored games draw the same board without extra saved state.
+  rowSpans(state) {
+    const s = state || this.state, spans = [[0, 3], [0, 5], [0, 7]];
+    for (const step of s.history) {
+      if (step.player === 0) spans[step.row][0] += step.count; else spans[step.row][1] -= step.count;
+    }
+    return spans;
+  }
+
+  pickRange(spans, player, row, count) {
+    const [lo, hi] = spans[row];
+    return player === 0 ? [lo, lo + count] : [hi - count, hi];
+  }
+
   commitMove(row, count) {
-    const oldCount = this.state.piles[row], next = engine.move(this.state, row, count);
+    const range = this.pickRange(this.rowSpans(), this.state.currentPlayer, row, count);
+    const next = engine.move(this.state, row, count);
     // Commit before animation: pause/resume only ever continues from the new position.
     this.state = next; this.selected = null; this.phase = 'animating'; this.locked = true;
-    this.motion = { row, from: next.piles[row], to: oldCount, start: this.now(), progress: 0 };
+    this.motion = { row, range, start: this.now(), progress: 0 };
     this.toast = '第 ' + (row + 1) + ' 排取走 ' + count + ' 颗';
     this.feedback(); this.save();
     if (next.winner !== null) this.recordResult();
@@ -553,23 +569,24 @@ class GameUI {
     });
     y += 73;
     const status = this.state.winner !== null ? '本局结束 · 拿最后一颗的人输' : this.phase === 'thinking' ? '电脑正在思考…' :
-      this.phase === 'animating' ? this.toast : this.selected ? '第 ' + (this.selected.row + 1) + ' 排 · 已选前 ' + this.selected.count + ' 颗' :
-      this.playerName(this.state.currentPlayer) + '：点一颗骰子，选中该排前 N 颗';
+      this.phase === 'animating' ? this.toast : this.selected ? '第 ' + (this.selected.row + 1) + ' 排 · 已选' + (this.state.currentPlayer === 0 ? '左' : '右') + '起 ' + this.selected.count + ' 颗' :
+      this.playerName(this.state.currentPlayer) + '：点一颗骰子，从' + (this.state.currentPlayer === 0 ? '左' : '右') + '边起选 N 颗';
     this.text(status, w / 2, y, 13, GOLD, 'center', 'normal', span); y += 17;
     // Seven dice remain a single line; full-row hit strips are >=50px tall.
+    const spans = this.rowSpans(), mover = this.state.currentPlayer;
     [3, 5, 7].forEach((initial, row) => {
       const by = y + row * rowHeight;
       this.panel(x, by, span, rowHeight - 5, '#103a29', '#33533d', 12);
       const count = this.state.piles[row], total = initial * size + (initial - 1) * gap;
       const sx = (w - total) / 2, dy = by + (rowHeight - 5 - size) / 2;
-      // Dice are taken from the front, so the taken ones are exactly the highlighted ones
-      // and the remaining dice keep their positions and faces.
-      const first = initial - count;
+      // Remaining dice keep their positions and faces; taken dice become empty slots on the taker's side.
+      const [lo, hi] = spans[row];
+      const picked = this.selected && this.selected.row === row ? this.pickRange(spans, mover, row, this.selected.count) : null;
       for (let index = 0; index < initial; index++) {
         const dx = sx + index * (size + gap), value = (index + row) % 6 + 1;
-        const chosen = !!this.selected && this.selected.row === row && index >= first && index < first + this.selected.count;
-        this.dice(dx, dy, size, value, chosen, index < first);
-        if (this.motion && this.motion.row === row && index >= initial - this.motion.to && index < initial - this.motion.from) {
+        const chosen = !!picked && index >= picked[0] && index < picked[1];
+        this.dice(dx, dy, size, value, chosen, index < lo || index >= hi);
+        if (this.motion && this.motion.row === row && index >= this.motion.range[0] && index < this.motion.range[1]) {
           const t = easeOut(this.motion.progress);
           this.ctx.save(); this.ctx.globalAlpha = Math.max(0, 1 - t);
           this.dice(dx, dy - t * MOVE_RISE, size, value, true, false); this.ctx.restore();
@@ -577,9 +594,9 @@ class GameUI {
       }
       this.hit('row-' + row, x, by, span, rowHeight - 5, point => {
         if (!count) return;
-        const index = Math.floor((point.x - sx) / (size + gap)) - first;
-        if (index < 0 || index >= count) return;
-        this.select(row, index + 1);
+        const index = Math.floor((point.x - sx) / (size + gap));
+        if (index < lo || index >= hi) return;
+        this.select(row, mover === 0 ? index - lo + 1 : hi - index);
       }, boardDisabled || count === 0);
     });
     y += rowHeight * 3 + 3;
@@ -625,7 +642,7 @@ class GameUI {
         actions = [['重新开始', () => { this.resumeCandidate = null; this.startGame(); }], ['继续对局', () => this.restore()]];
         break;
       case 'rules':
-        content = '① 双方轮流，每回合只能从一排拿至少一颗。\n\n② 拿最后一颗的人输。\n\n③ 点击骰子选中该排前 N 颗，确认拿取 / 取消。';
+        content = '① 双方轮流，每回合只能从一排拿至少一颗。\n\n② 拿最后一颗的人输。\n\n③ 左边的一方从左往右拿，右边的一方从右往左拿：点一颗骰子即选中到它为止的 N 颗，确认拿取 / 取消。';
         break;
       case 'leave':
         content = '当前对局会保留在本机。\n\n返回后可从首页继续，也可选择新开一局。';
