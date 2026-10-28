@@ -428,6 +428,44 @@ class GameUI {
     this.circle(15, 41, 3, '#cf8b7a'); this.circle(49, 41, 3, '#cf8b7a'); c.restore();
   }
 
+  sparkle(x, y, r, color) {
+    const c = this.ctx;
+    c.beginPath(); c.moveTo(x, y - r);
+    c.quadraticCurveTo(x, y, x + r, y); c.quadraticCurveTo(x, y, x, y + r);
+    c.quadraticCurveTo(x, y, x - r, y); c.quadraticCurveTo(x, y, x, y - r);
+    c.closePath(); c.fillStyle = color; c.fill();
+  }
+
+  // Candy-dice wordmark: three tilted, bobbing tiles with cheeks. Drawn, not a font or image.
+  logo(cx, cy, tile, options) {
+    const c = this.ctx, opts = options || {}, gap = tile * 0.14;
+    const tiles = [['3', '#f2a48f', '#c8705d', -0.14, 0.06], ['5', '#f4d27f', '#c9a04a', 0.06, -0.08],
+      ['7', '#a3d9b6', '#5f9f78', 0.12, 0.04]];
+    const start = cx - (tile * 3 + gap * 2) / 2 + tile / 2;
+    tiles.forEach(([digit, face, edge, tilt, bob], i) => {
+      const x = start + i * (tile + gap), y = cy + bob * tile, half = tile / 2, r = tile * 0.26;
+      c.save(); c.translate(x, y); c.rotate(tilt);
+      this.panel(-half + 1, -half + tile * 0.09, tile - 2, tile, 'rgba(3,18,12,0.55)', null, r);
+      this.panel(-half, -half, tile, tile, face, edge, r);
+      this.panel(-half + tile * 0.14, -half + tile * 0.09, tile * 0.42, tile * 0.13, 'rgba(255,255,255,0.45)', null, tile * 0.07);
+      if (!opts.mini) {
+        this.circle(-half + tile * 0.2, half - tile * 0.24, tile * 0.075, 'rgba(214,96,92,0.45)');
+        this.circle(half - tile * 0.2, half - tile * 0.24, tile * 0.075, 'rgba(214,96,92,0.45)');
+      }
+      c.font = 'bold ' + Math.round(tile * 0.66) + 'px sans-serif';
+      c.textAlign = 'center'; c.textBaseline = 'middle';
+      c.lineJoin = 'round'; c.lineWidth = Math.max(2, tile * 0.1); c.strokeStyle = '#fff7e6';
+      c.strokeText(digit, 0, tile * 0.04); c.fillStyle = '#2f3b32'; c.fillText(digit, 0, tile * 0.04);
+      c.restore();
+    });
+    if (!opts.mini) {
+      const span = tile * 3 + gap * 2;
+      this.sparkle(cx - span / 2 - tile * 0.32, cy - tile * 0.36, tile * 0.16, '#f6dea0');
+      this.sparkle(cx + span / 2 + tile * 0.3, cy - tile * 0.5, tile * 0.11, '#ffffff');
+      this.sparkle(cx + span / 2 + tile * 0.42, cy + tile * 0.12, tile * 0.08, '#f6dea0');
+    }
+  }
+
   dice(x, y, size, value, selected, ghost) {
     const c = this.ctx;
     if (!ghost) this.panel(x + 1, y + 3, size - 2, size - 1, '#09261c', null, 6);
@@ -490,13 +528,14 @@ class GameUI {
   drawHome() {
     const w = this.width, x = 20, span = w - 40, half = (span - 8) / 2;
     const compact = this.bottom - this.top < 470, step = compact ? 48 : 52;
-    const contentHeight = (compact ? 8 + 56 : 14 + 68) + 114 + step * 3 + 52 + 44;
+    const titleHeight = compact ? 60 : 80;
+    const contentHeight = (compact ? 8 : 14) + titleHeight + 114 + step * 3 + 52 + 44;
     // Leave room for the status line below the last buttons; center whatever space is left.
     const spare = this.bottom - this.top - contentHeight - 28;
     let y = this.top + (compact ? 8 : 14) + Math.max(0, spare / 2);
-    this.text('357', w / 2, y + 19, compact ? 34 : 40, GOLD, 'center', 'bold');
-    this.text('经 典 取 骰 游 戏', w / 2, y + (compact ? 44 : 51), 12, MUTED, 'center');
-    y += compact ? 56 : 68;
+    this.logo(w / 2, y + (compact ? 20 : 28), compact ? 36 : 48);
+    this.text('经 典 取 骰 游 戏', w / 2, y + (compact ? 50 : 66), 12, MUTED, 'center');
+    y += titleHeight;
     const modes = [ ['pvp', 'easy', '同屏双人', '与身边的人切磋'], ['ai', 'easy', 'AI · 休闲', '轻松熟悉规则'],
       ['ai', 'medium', 'AI · 挑战', '多想一步'], ['ai', 'hard', 'AI · 高手', '更高难度对手'] ];
     modes.forEach((item, i) => {
@@ -555,8 +594,8 @@ class GameUI {
     const rowHeight = Math.min(Math.max(73, Math.min(ROW_MAX, size + 56)), Math.max(55, available / 3));
     let y = this.top + 10 + Math.max(0, (available - rowHeight * 3) / 2);
     this.button('back', '返回', x, y, 58, 44, () => this.openModal('leave'));
-    this.text('357', w / 2, y + 14, 24, GOLD, 'center', 'bold');
-    this.text(this.state.mode === 'pvp' ? '同屏双人' : 'AI · ' + LEVELS[this.state.difficulty], w / 2, y + 36, 12, MUTED, 'center');
+    this.logo(w / 2, y + 13, 22, { mini: true });
+    this.text(this.state.mode === 'pvp' ? '同屏双人' : 'AI · ' + LEVELS[this.state.difficulty], w / 2, y + 38, 12, MUTED, 'center');
     this.button('restart', '重开', w - 78, y, 58, 44, () => this.openModal('restart'));
     y += 52;
     const half = (span - 8) / 2;
