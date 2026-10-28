@@ -29,7 +29,7 @@ function harness(options = {}) {
     set(value) { alpha = value; calls.push({ method: 'globalAlpha', args: [value] }); }
   });
   for (const method of ['clearRect', 'fillRect', 'beginPath', 'moveTo', 'lineTo',
-    'quadraticCurveTo', 'closePath', 'fill', 'stroke', 'arc', 'translate', 'scale']) {
+    'quadraticCurveTo', 'closePath', 'fill', 'stroke', 'arc', 'translate', 'scale', 'rotate', 'strokeText']) {
     ctx[method] = (...args) => calls.push({ method, args });
   }
   // roundRect deliberately does not exist: older Mini Game Canvas must work.
