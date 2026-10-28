@@ -56,15 +56,31 @@ test('all 192 actual positions match independent oracle; every hard move is exac
     const piles = freeze([a, b, c]);
     positions++;
     assert.equal(isWinning(piles), oracle(piles), `oracle at ${piles}`);
-    const best = chooseMove(piles, 'hard', () => { throw new Error('hard must not use RNG'); });
+    let draws = 0;
+    const counted = value => () => { draws++; return value; };
+    const best = chooseMove(piles, 'hard', counted(0));
     if (!sum(piles)) {
       assert.equal(best, null);
+      assert.equal(draws, 0);
       continue;
     }
-    legal(piles, best);
-    const next = piles.slice();
-    next[best.row] -= best.count;
-    if (oracle(piles)) assert.equal(oracle(next), false, `optimal at ${piles}`);
+    const winningMoves = [];
+    for (let row = 0; row < 3; row++) for (let count = 1; count <= piles[row]; count++) {
+      const after = piles.slice(); after[row] -= count;
+      if (!oracle(after)) winningMoves.push({ row, count });
+    }
+    assert.equal(draws, winningMoves.length > 1 ? 1 : 0, `hard uses RNG only to break ties at ${piles}`);
+    for (const sample of [0, 0.5, 0.999999999]) {
+      const choice = chooseMove(piles, 'hard', () => sample);
+      legal(piles, choice);
+      const next = piles.slice();
+      next[choice.row] -= choice.count;
+      if (oracle(piles)) assert.equal(oracle(next), false, `optimal at ${piles}`);
+    }
+    if (winningMoves.length > 1) {
+      const picks = new Set([0, 0.999999999].map(s => JSON.stringify(chooseMove(piles, 'hard', () => s))));
+      assert.equal(picks.size, 2, `hard varies among winning moves at ${piles}`);
+    }
     for (const difficulty of ['easy', 'medium']) for (const sample of [0, 0.699999999, 0.7, 0.999999999]) {
       const choice = chooseMove(piles, difficulty, () => sample);
       legal(piles, choice);
