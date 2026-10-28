@@ -74,7 +74,8 @@ function harness(options = {}) {
       assert.ok(strip);
       const size = Math.min(50, (platform.width - 40 - 12 - 5 * 6) / 7);
       const initial = [3, 5, 7][row], total = initial * size + (initial - 1) * 5;
-      const x = (platform.width - total) / 2 + (count - 1) * (size + 5) + size / 2;
+      const first = initial - ui.state.piles[row];
+      const x = (platform.width - total) / 2 + (first + count - 1) * (size + 5) + size / 2;
       this.emit('touch', { x, y: strip.y + strip.h / 2 });
     },
     step() {
@@ -456,6 +457,44 @@ test('actual move animation highlights, rises and fades frame by frame; not only
     assert.ok(last[i].y < first[i].y - 10); assert.equal(last[i].x, first[i].x);
   }
   assert.equal(h.ctx.globalAlpha, 1); assert.equal(h.depth, 0);
+});
+
+test('the dice taken are exactly the highlighted ones; the rest keep their place and faces', t => {
+  const h = harness(); t.after(() => h.ui.destroy()); pvp(h);
+  const originalDice = h.ui.dice;
+  const capture = () => {
+    const dice = [];
+    h.ui.dice = function (...args) {
+      dice.push({ x: args[0], y: args[1], value: args[3], selected: args[4], ghost: args[5] });
+      return originalDice.apply(this, args);
+    };
+    h.ui.render(); h.ui.dice = originalDice;
+    return dice;
+  };
+  const row2 = dice => {
+    const ys = [...new Set(dice.map(d => d.y))].sort((a, b) => a - b);
+    return dice.filter(d => d.y === ys[2]);
+  };
+  h.die(2, 3);
+  const before = row2(capture());
+  const picked = before.filter(d => d.selected).map(d => d.x);
+  assert.equal(picked.length, 3);
+  const overlays = [];
+  h.ui.dice = function (...args) {
+    if (this.motion && args[4] && !args[5]) overlays.push(args[0]);
+    return originalDice.apply(this, args);
+  };
+  h.touch('confirm'); h.flush(); h.ui.dice = originalDice;
+  assert.deepEqual([...new Set(overlays)].sort((a, b) => a - b), picked, 'animation lifts the highlighted dice');
+  const after = row2(capture());
+  assert.deepEqual(after.filter(d => d.ghost).map(d => d.x), picked, 'empty slots are where the picked dice were');
+  const kept = before.filter(d => !d.selected), remaining = after.filter(d => !d.ghost);
+  assert.deepEqual(remaining.map(d => [d.x, d.value]), kept.map(d => [d.x, d.value]));
+  h.die(2, 1); assert.deepEqual(h.ui.selected, { row: 2, count: 1 });
+  const next = row2(capture()).filter(d => d.selected).map(d => d.x);
+  assert.deepEqual(next, [kept[0].x], 'the next pick starts at the first remaining die');
+  h.emit('touch', { x: picked[0] + 2, y: h.ui.hitBoxes.find(b => b.id === 'row-2').y + 20 });
+  assert.deepEqual(h.ui.selected, { row: 2, count: 1 }, 'tapping an empty slot changes nothing');
 });
 
 test('tall screens use larger dice and center content instead of leaving the bottom empty', t => {

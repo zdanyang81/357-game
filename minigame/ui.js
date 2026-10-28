@@ -562,10 +562,14 @@ class GameUI {
       this.panel(x, by, span, rowHeight - 5, '#103a29', '#33533d', 12);
       const count = this.state.piles[row], total = initial * size + (initial - 1) * gap;
       const sx = (w - total) / 2, dy = by + (rowHeight - 5 - size) / 2;
+      // Dice are taken from the front, so the taken ones are exactly the highlighted ones
+      // and the remaining dice keep their positions and faces.
+      const first = initial - count;
       for (let index = 0; index < initial; index++) {
         const dx = sx + index * (size + gap), value = (index + row) % 6 + 1;
-        this.dice(dx, dy, size, value, !!this.selected && this.selected.row === row && index < this.selected.count, index >= count);
-        if (this.motion && this.motion.row === row && index >= this.motion.from && index < this.motion.to) {
+        const chosen = !!this.selected && this.selected.row === row && index >= first && index < first + this.selected.count;
+        this.dice(dx, dy, size, value, chosen, index < first);
+        if (this.motion && this.motion.row === row && index >= initial - this.motion.to && index < initial - this.motion.from) {
           const t = easeOut(this.motion.progress);
           this.ctx.save(); this.ctx.globalAlpha = Math.max(0, 1 - t);
           this.dice(dx, dy - t * MOVE_RISE, size, value, true, false); this.ctx.restore();
@@ -573,7 +577,7 @@ class GameUI {
       }
       this.hit('row-' + row, x, by, span, rowHeight - 5, point => {
         if (!count) return;
-        const index = Math.floor((point.x - sx) / (size + gap));
+        const index = Math.floor((point.x - sx) / (size + gap)) - first;
         if (index < 0 || index >= count) return;
         this.select(row, index + 1);
       }, boardDisabled || count === 0);
