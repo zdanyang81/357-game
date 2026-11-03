@@ -35,7 +35,7 @@ test('creation defaults, independent arrays, modes and options', () => {
   });
   for (const mode of ['ai', 'pvp']) for (const aiFirst of [true, false]) {
     const state = createGame({ mode, aiFirst });
-    assert.equal(state.currentPlayer, mode === 'ai' && aiFirst ? 1 : 0);
+    assert.equal(state.currentPlayer, aiFirst ? 1 : 0);
     assert.ok(validateState(state));
   }
   const avatars = [1, 5];

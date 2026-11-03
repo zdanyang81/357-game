@@ -49,8 +49,10 @@ function createGame({ mode = 'ai', difficulty = 'easy', aiFirst = false,
       typeof aiFirst !== 'boolean' || !validAvatars(avatars)) {
     throw new Error('非法游戏选项');
   }
+  // aiFirst means the right-side player opens. It applies to both modes;
+  // older saves may still have the flag set while player 0 opened a local match.
   return { version: 1, piles: INITIAL.slice(),
-    currentPlayer: mode === 'ai' && aiFirst ? 1 : 0,
+    currentPlayer: aiFirst ? 1 : 0,
     mode, difficulty, aiFirst, avatars: avatars.slice(), history: [], winner: null };
 }
 
@@ -75,6 +77,22 @@ function isWinning(piles) {
   return solve(piles);
 }
 
+function replayFrom(value, player) {
+  const piles = INITIAL.slice();
+  let winner = null;
+  for (const entry of value.history) {
+    if (winner !== null || !record(entry, ['player', 'row', 'count', 'piles']) ||
+        entry.player !== player || !Number.isInteger(entry.row) || entry.row < 0 || entry.row > 2 ||
+        !Number.isInteger(entry.count) || entry.count < 1 || entry.count > piles[entry.row] ||
+        !validPiles(entry.piles)) return false;
+    piles[entry.row] -= entry.count;
+    if (!same(piles, entry.piles)) return false;
+    if (total(piles) === 0) winner = 1 - player;
+    else player = 1 - player;
+  }
+  return same(piles, value.piles) && player === value.currentPlayer && winner === value.winner;
+}
+
 function validateState(value) {
   // A validator must return false even for accessors/proxies or cyclic junk.
   try {
@@ -84,20 +102,9 @@ function validateState(value) {
         !validPiles(value.piles) || ![0, 1].includes(value.currentPlayer) ||
         ![null, 0, 1].includes(value.winner) || !Array.isArray(value.history) ||
         value.history.length > 15 || !array(value.history, value.history.length, () => true)) return false;
-    const piles = INITIAL.slice();
-    let player = value.mode === 'ai' && value.aiFirst ? 1 : 0;
-    let winner = null;
-    for (const entry of value.history) {
-      if (winner !== null || !record(entry, ['player', 'row', 'count', 'piles']) ||
-          entry.player !== player || !Number.isInteger(entry.row) || entry.row < 0 || entry.row > 2 ||
-          !Number.isInteger(entry.count) || entry.count < 1 || entry.count > piles[entry.row] ||
-          !validPiles(entry.piles)) return false;
-      piles[entry.row] -= entry.count;
-      if (!same(piles, entry.piles)) return false;
-      if (total(piles) === 0) winner = 1 - player;
-      else player = 1 - player;
-    }
-    return same(piles, value.piles) && player === value.currentPlayer && winner === value.winner;
+    const modern = value.aiFirst ? 1 : 0;
+    const legacy = value.mode === 'ai' && value.aiFirst ? 1 : 0;
+    return replayFrom(value, modern) || (legacy !== modern && replayFrom(value, legacy));
   } catch (_) { return false; }
 }
 
