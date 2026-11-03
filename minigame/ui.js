@@ -731,7 +731,8 @@ class GameUI {
     const h = Math.min(470, this.bottom - this.top - 20), y = this.top + (this.bottom - this.top - h) / 2;
     this.panel(x, y, w, h, '#112e24', '#9c8753', 19);
     const titles = { restore: '发现本地对局', rules: '三句话，开始取骰', stats: '本地战绩', avatars: '选择本地形象',
-      leave: '返回首页？', restart: '重新开始？', history: '走子记录', result: '本局结束' };
+      leave: '返回首页？', restart: '重新开始？', history: '走子记录', result: '本局结束',
+      'online-consent': '确认进入内测房间', 'online-message': '操作提示' };
     this.text(titles[modal.type] || '357', x + 18, y + 30, 19, GOLD, 'left', 'bold', w - 84);
     if (!['restore', 'result'].includes(modal.type))
       this.button('modal-close', '关闭', x + w - 68, y + 9, 56, 44, () => this.closeModal());
@@ -744,6 +745,14 @@ class GameUI {
         break;
       case 'rules':
         content = '① 双方轮流，每回合只能从一排拿至少一颗。\n\n② 拿最后一颗的人输。\n\n③ 左边的一方从左往右拿，右边的一方从右往左拿：点一颗骰子即选中到它为止的 N 颗，确认拿取 / 取消。';
+        break;
+      case 'online-consent':
+        content = (modal.join ? '将加入房间：' + modal.code : '将创建随机房间，无需填写加入房间码。') +
+          '\n\n自选头像将发送到357内测服务，供本房间对手查看，房间过期清除。内置形象不含个人头像。\n\n确认才上传和入房，取消不发送。';
+        actions = [['取消', () => { this.cancelOnlineAvatar(); this.render(); }], ['确认进入', () => this.confirmOnlineConsent(modal)]];
+        break;
+      case 'online-message':
+        content = modal.message;
         break;
       case 'online-result':
         this.text(this.playerName(this.state.winner) + '获胜', innerX, y + 85, 22, GOLD);

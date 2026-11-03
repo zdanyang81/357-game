@@ -83,6 +83,16 @@ test('unknown creation stops, never automatically retries or makes another room'
   const h = setup(); const pending = h.s.enter('', preset); h.fail(); await pending;
   assert.equal(h.s.creationUnknown, true); await h.s.enter('', preset); assert.equal(h.calls.length, 1); assert.equal(h.timers.size, 0);
 });
+test('unknown entry keeps a visible network cause but redacts capabilities and still forbids retry', async () => {
+  const h = setup(); const capability = 'a'.repeat(64); h.s.accessKey = capability;
+  const pending = h.s.enter('', preset);
+  h.queue.shift().reject(new Error('request:fail url not in domain list; capability=' + capability + '; Bearer private-seat-token'));
+  await pending;
+  assert.equal(h.s.creationUnknown, true); assert.match(h.s.error, /url not in domain list/);
+  assert.equal(h.s.error.includes(capability), false); assert.equal(h.s.error.includes('private-seat-token'), false);
+  await h.s.enter('', preset); assert.equal(h.calls.length, 1);
+});
+
 test('definite entry rejection permits correction without marking unknown', async () => {
   const h = setup(); const pending = h.s.enter(code, preset); h.respond({ error: { code: 'FULL', message: '房间已满' } }, 409); await pending;
   assert.match(h.s.error, /已满/); assert.equal(h.s.creationUnknown, false);

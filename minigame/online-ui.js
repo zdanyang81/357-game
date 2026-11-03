@@ -31,18 +31,34 @@ module.exports = {
     } else { this.state = null; this.screen = 'online'; }
     this.render();
   },
-  async enterOnline(join) {
-    if (this.online.busy || this.online.creationUnknown || this.online.room || this.profileBusy) return;
-    if (join && !CODE.test(this.onlineCode)) { this.online.error = '请先输入有效房间码'; this.render(); return; }
-    this.cancelOnlineAvatar(); const generation = this.profileGeneration;
-    this.profileBusy = true; this.render();
+  enterOnline(join) {
+    if (this.destroyed || this.hidden || !this.onlineMode || this.screen !== 'online' || this.modal ||
+        this.online.busy || this.online.creationUnknown || this.online.room || this.profileBusy) return;
+    if (join && !CODE.test(this.onlineCode)) { this.showOnlineMessage('请先输入有效房间码'); return; }
+    this.cancelOnlineAvatar();
+    // Snapshot only the chosen room/profile, not credentials. No request before a second explicit tap.
+    this.openModal({ type: 'online-consent', generation: this.profileGeneration, join: !!join,
+      code: join ? this.onlineCode : '', profile: JSON.parse(JSON.stringify(this.onlineProfile)), page: 0 });
+  },
+  async confirmOnlineConsent(consent) {
+    if (this.modal !== consent || consent.type !== 'online-consent' || consent.generation !== this.profileGeneration ||
+        this.destroyed || this.hidden || !this.onlineMode || this.screen !== 'online' || this.online.busy ||
+        this.online.creationUnknown || this.online.room || this.profileBusy || (consent.join && !CODE.test(consent.code))) return;
+    this.modal = null; this.profileBusy = true; this.render();
     try {
-      if (typeof this.platform.confirmProfile !== 'function') throw new Error('当前平台无法确认头像发送，联网未开放');
-      const confirmed = await this.platform.confirmProfile();
-      if (confirmed && this.onlineMode && generation === this.profileGeneration && !this.destroyed)
-        await this.online.enter(join ? this.onlineCode : '', this.onlineProfile);
-    } catch (error) { this.online.error = error.message; }
-    finally { this.profileBusy = false; if (!this.destroyed) this.render(); }
+      const entered = await this.online.enter(consent.code, consent.profile);
+      if (!entered && this.online.error && !this.destroyed && this.onlineMode && consent.generation === this.profileGeneration)
+        this.showOnlineMessage(this.online.error);
+    } catch (_) {
+      // Session normally catches transport failures. Unexpected failures are not retried.
+      if (!this.destroyed && this.onlineMode && consent.generation === this.profileGeneration)
+        this.showOnlineMessage('入房结果未确认，请停止重复操作并稍后查询');
+    } finally { this.profileBusy = false; if (!this.destroyed) this.render(); }
+  },
+  showOnlineMessage(message) {
+    this.online.error = typeof message === 'string' ? message.slice(0, 400) : '操作未完成，请稍后查询';
+    if (!this.destroyed && !this.hidden && this.onlineMode)
+      this.openModal({ type: 'online-message', message: this.online.error, page: 0 });
   },
   async inputOnlineCode() {
     try {
@@ -83,6 +99,7 @@ module.exports = {
   },
   cancelOnlineAvatar() {
     this.profileGeneration++; this.avatarOperation = null; this.profileBusy = false;
+    if (this.modal && this.modal.type === 'online-consent') this.modal = null;
     if (this.platform.cancelWechatAvatar) this.platform.cancelWechatAvatar();
   },
   async leaveOnline() {

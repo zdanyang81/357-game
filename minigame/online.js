@@ -62,7 +62,10 @@ class OnlineSession {
     } catch (error) {
       if (epoch === this.epoch && !this.destroyed) {
         this.creationUnknown = this.enabled && !error.definite;
-        this.error = this.creationUnknown ? '创建/加入结果未知，已停止操作；请等待房间过期后重进内测' : error.message;
+        let reason = error && typeof error.message === 'string' ? error.message : '网络请求未确认';
+        for (const secret of [this.token, this.accessKey]) if (secret) reason = reason.split(secret).join('[已隐藏]');
+        reason = reason.replace(/\bBearer\s+[A-Za-z0-9_.~+\/-]+/gi, 'Bearer [已隐藏]').slice(0, 180);
+        this.error = this.creationUnknown ? '创建/加入结果未知，已停止重复操作。\n原因：' + reason + '\n请先核对网络或配置；不要反复创建。' : reason;
       }
       return false;
     } finally { if (epoch === this.epoch) { this.busy = false; this.notify(); this.schedule(); } }

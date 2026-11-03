@@ -673,18 +673,76 @@ test('online lobby is bounded on narrow screen; invites only prefill and never a
   assert.equal(h.ui.hitBoxes.find(b => b.id === 'online-join').disabled, true);
 });
 
+test('Canvas consent does not wait for a native confirmation promise that never calls back', async t => {
+  const h = harness({ safeTop: 84 }); t.after(() => h.ui.destroy()); h.touch('online');
+  let nativeCalls = 0, entered = 0;
+  h.platform.confirmProfile = () => { nativeCalls++; return new Promise(() => {}); };
+  h.ui.online.enter = async () => { entered++; return true; };
+  h.ui.enterOnline(false); await Promise.resolve();
+  assert.equal(h.ui.profileBusy, false, 'opening an in-game consent does not leave a native promise lock');
+  assert.equal(nativeCalls, 0); assert.equal(entered, 0);
+  assert.equal(h.ui.modal.type, 'online-consent'); withinSafeArea(h, 'online consent');
+  assert.ok(h.ui.hitBoxes.every(box => ['modal-close', 'modal-action-0', 'modal-action-1'].includes(box.id)));
+});
+
+test('Canvas room consent cancels without requests and accepts a frozen join/profile snapshot once', async t => {
+  const h = harness({ safeTop: 84 }); t.after(() => h.ui.destroy()); h.touch('online');
+  h.ui.onlineCode = 'ABCDEF89'; h.ui.online.enabled = true;
+  const calls = []; let complete;
+  h.ui.online.enter = (code, profile) => { calls.push({ code, profile }); return new Promise(done => { complete = done; }); };
+  h.ui.enterOnline(true); const cancelled = h.ui.modal;
+  h.touch('modal-action-0'); await h.ui.confirmOnlineConsent(cancelled); assert.equal(calls.length, 0);
+  h.ui.enterOnline(true); const consent = h.ui.modal;
+  const expected = copy(h.ui.onlineProfile); h.ui.onlineProfile.avatar.index = 4; h.ui.onlineCode = 'BCDEFG89';
+  withinSafeArea(h, 'join consent');
+  assert.equal(consent.pages, 1, 'critical consent text is visible on one page');
+  const pending = h.ui.confirmOnlineConsent(consent);
+  await h.ui.confirmOnlineConsent(consent); h.ui.enterOnline(false);
+  assert.equal(calls.length, 1); assert.deepEqual(calls[0], { code: 'ABCDEF89', profile: expected });
+  complete(true); await pending; assert.equal(h.ui.profileBusy, false);
+});
+
+test('Canvas consent rejects old owners after hide, leave, destroy, close, switch or invalid generation', async t => {
+  for (const action of ['hide', 'leave', 'destroy', 'close', 'preset', 'generation']) {
+    const h = harness(); t.after(() => h.ui.destroy()); h.touch('online'); let entered = 0;
+    h.ui.online.enter = async () => { entered++; return true; };
+    h.ui.enterOnline(false); const consent = h.ui.modal;
+    if (action === 'hide') { h.emit('hide'); h.emit('show'); }
+    else if (action === 'leave') await h.ui.leaveOnline();
+    else if (action === 'destroy') h.ui.destroy();
+    else if (action === 'close') h.ui.closeModal();
+    else if (action === 'preset') { h.ui.cancelOnlineAvatar(); h.ui.render(); h.touch('online-preset'); }
+    else h.ui.profileGeneration++;
+    await h.ui.confirmOnlineConsent(consent); assert.equal(entered, 0, action);
+  }
+});
+
+test('failed and unknown entry shows a full Canvas message without retrying', async t => {
+  const h = harness({ safeTop: 84 }); t.after(() => h.ui.destroy()); h.touch('online');
+  let entered = 0;
+  const message = '创建/加入结果未知，已停止操作；请等待房间过期后重进内测';
+  h.ui.online.enter = async () => { entered++; h.ui.online.creationUnknown = true; h.ui.online.error = message; return false; };
+  h.ui.enterOnline(false); await h.ui.confirmOnlineConsent(h.ui.modal);
+  assert.equal(entered, 1); assert.equal(h.ui.modal.type, 'online-message');
+  assert.equal(h.ui.modal.message, message); withinSafeArea(h, 'entry error');
+  assert.equal(h.ui.modal.pages, 1); h.ui.closeModal(); h.ui.enterOnline(false); assert.equal(entered, 1);
+  assert.equal(h.ui.hitBoxes.find(b => b.id === 'online-create').disabled, true);
+});
+
 test('random room creation never requires or submits the code field reserved for joining', async t => {
   const h = harness(); t.after(() => h.ui.destroy()); h.touch('online');
   h.ui.online.enabled = true;
-  const submitted = []; let confirmations = 0;
-  h.platform.confirmProfile = async () => { confirmations++; return true; };
+  const submitted = [];
+  h.platform.confirmProfile = () => { assert.fail('room entry no longer uses native confirmation'); };
   h.ui.online.enter = async code => { submitted.push(code); return true; };
   for (const joinCode of ['', 'ABCDEF89', 'INVALID1']) {
     h.ui.onlineCode = joinCode; h.ui.render();
     assert.equal(h.ui.hitBoxes.find(b => b.id === 'online-create').disabled, false);
-    await h.ui.enterOnline(false);
+    h.ui.enterOnline(false); assert.equal(h.ui.modal.type, 'online-consent');
+    assert.equal(submitted.length, ['', 'ABCDEF89', 'INVALID1'].indexOf(joinCode));
+    await h.ui.confirmOnlineConsent(h.ui.modal);
   }
-  assert.deepEqual(submitted, ['', '', '']); assert.equal(confirmations, 3);
+  assert.deepEqual(submitted, ['', '', '']);
 });
 
 test('network board only accepts own turn; no local AI, optimistic move, save or result ledger', async t => {
@@ -776,14 +834,15 @@ test('WeChat avatar button permits retry after a failed tap but retires after su
 
 test('cancelled native album picker releases busy and still permits explicit room creation', async t => {
   const h = harness(); t.after(() => h.ui.destroy()); h.touch('online');
-  let reject, entered = 0, confirmed = 0;
+  let reject, entered = 0;
   h.platform.chooseAlbumAvatar = () => new Promise((_resolve, fail) => { reject = fail; });
-  h.platform.confirmProfile = async () => { confirmed++; return true; };
+  h.platform.confirmProfile = () => { assert.fail('native entry confirm is not needed'); };
   h.ui.online.enter = async () => { entered++; return true; };
   const pending = h.ui.chooseOnlineAvatar('album'); h.emit('hide'); h.emit('show');
   reject(new Error('chooseMedia:fail cancel')); await pending;
   assert.equal(h.ui.profileBusy, false); assert.equal(h.ui.onlineProfile.avatar.type, 'preset');
-  assert.equal(entered, 0); await h.ui.enterOnline(false); assert.equal(confirmed, 1); assert.equal(entered, 1);
+  assert.equal(entered, 0); h.ui.enterOnline(false); assert.equal(entered, 0);
+  await h.ui.confirmOnlineConsent(h.ui.modal); assert.equal(entered, 1);
 });
 
 test('avatar refusal and late choice preserve playable preset without sending any image', async t => {
