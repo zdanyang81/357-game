@@ -49,6 +49,12 @@ assert.ok(calls.some(c => c[0] === 'play')); p.destroy(); assert.ok(calls.some(c
 assert.ok(calls.some(c => c[0] === 'off-press') && calls.some(c => c[0] === 'off-cancel'));
 wx.getStorageSync = wx.setStorageSync = () => { throw Error('storage unavailable'); };
 assert.equal(p.storage.get('x'), null); assert.equal(p.storage.set('x', {}), false);
+wx.removeStorageSync = () => { throw Error('remove unavailable'); };
+assert.equal(p.storage.remove('x'), false);
+wx.shareAppMessage = () => { throw Error('share unavailable'); };
+assert.throws(() => p.share(), /share unavailable/);
+delete wx.shareAppMessage;
+assert.throws(() => p.share(), TypeError);
 wx.getWindowInfo = () => ({ windowWidth: 320, windowHeight: 544, screenTop: 24, pixelRatio: 1, safeArea: { top: 24, bottom: 534 } });
 const offsetPlatform = createPlatform(wx);
 assert.equal(offsetPlatform.safeTop, 60, 'screen coordinates must be translated to window coordinates');

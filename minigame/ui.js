@@ -102,8 +102,8 @@ class GameUI {
       if (!value || value.version !== 1 || typeof value.id !== 'string' || value.id.length > 120 ||
           typeof value.assisted !== 'boolean' || !engine.validateState(value.state)) return null;
       const state = value.state;
-      // A finished game is already in the stats ledger and has nothing left to resume.
-      if (state.winner !== null) return null;
+      // A persisted result also retires stale pre-terminal saves when cleanup failed.
+      if (state.winner !== null || this.stats.results.some(item => item.id === value.id)) return null;
       if (!Array.isArray(state.history) || state.history.length > 15) return null;
       // Replay from whoever actually opened, so an older local match that stored
       // aiFirst without giving that side the first move can still resume.
@@ -133,9 +133,11 @@ class GameUI {
     if (this.saveCleared) return;
     try {
       const storage = this.platform.storage;
-      const ok = typeof storage.remove === 'function' ? storage.remove(KEYS.save) : storage.set(KEYS.save, null);
-      this.saveCleared = ok !== false;
+      this.saveCleared = typeof storage.remove === 'function' && storage.remove(KEYS.save) !== false;
     } catch (error) { this.lastError = error; }
+    // A failed removal must not leave an apparently resumable old board behind.
+    // store() reports a warning if even the fallback tombstone cannot be written.
+    if (!this.saveCleared) this.saveCleared = this.store(KEYS.save, null);
   }
 
   persistStats() { this.statsDirty = !this.store(KEYS.stats, this.stats); }
@@ -283,8 +285,10 @@ class GameUI {
     this.state = next; this.selected = null; this.phase = 'animating'; this.locked = true;
     this.motion = { row, range, start: this.now(), progress: 0 };
     this.toast = '第 ' + (row + 1) + ' 排取走 ' + count + ' 颗';
-    this.feedback(); this.save();
+    this.feedback();
+    // Persist the terminal identity before cleanup so a surviving old save is rejected.
     if (next.winner !== null) this.recordResult();
+    this.save();
     this.render();
     const frame = () => {
       if (!this.motion) return;
