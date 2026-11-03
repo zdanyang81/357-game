@@ -47,6 +47,10 @@ function harness(options = {}) {
       set(key, value) {
         if (options.storageFailure === 'false') return false;
         if (options.storageFailure === 'throw') throw new Error('storage full');
+        if (key === KEYS.save && value === null) {
+          if (options.tombstoneFailure === 'false') return false;
+          if (options.tombstoneFailure === 'throw') throw new Error('tombstone write failed');
+        }
         data[key] = copy(value); return true;
       }
     },
@@ -57,6 +61,11 @@ function harness(options = {}) {
     clearTimeout(id) { timers.delete(id); },
     now() { return clock; }
   };
+  if (options.removeFailure) platform.storage.remove = () => {
+    if (options.removeFailure === 'throw') throw new Error('remove failed');
+    return false;
+  };
+  if (options.shareFailure) platform.share = () => { throw new Error('share unavailable'); };
   const ui = new GameUI(platform);
   const h = {
     ui, platform, data, calls, timers, listeners, ctx,
@@ -134,6 +143,66 @@ test('existing opener compatibility restores legacy local saves with aiFirst set
     h.ui.select(1, 1); h.ui.confirmMove(); h.flush();
     assert.ok(engine.validateState(h.ui.state));
   }
+});
+
+test('failed terminal removal falls back to a tombstone and never resumes a completed game', t => {
+  for (const removeFailure of ['false', 'throw']) {
+    const h = harness({ removeFailure }); pvp(h); finishPvp(h);
+    const result = copy(h.ui.stats.results[0]);
+    assert.equal(h.ui.saveCleared, true);
+    assert.equal(h.data[KEYS.save], null);
+    assert.equal(h.ui.storageWarning, false, 'successful fallback recovers the storage operation');
+    h.emit('hide'); h.emit('show'); h.ui.destroy();
+    const next = harness({ data: h.data }); t.after(() => next.ui.destroy());
+    assert.equal(next.ui.modal, null); assert.equal(next.ui.resumeCandidate, null);
+    assert.deepEqual(next.ui.stats.results, [result]);
+    next.touch('mode-0'); next.touch('start'); assert.notEqual(next.ui.gameId, result.id);
+    assert.equal(next.ui.state.history.length, 0);
+    finishPvp(next); assert.equal(next.ui.stats.results.length, 2);
+    assert.deepEqual(next.ui.stats.results[0], result);
+  }
+});
+
+test('persisted result rejects stale unfinished save even when removal and tombstone both fail', t => {
+  for (const removeFailure of ['false', 'throw']) for (const tombstoneFailure of ['false', 'throw']) {
+    const h = harness({ removeFailure, tombstoneFailure }); pvp(h);
+    for (const row of [0, 1]) { h.ui.select(row, h.ui.state.piles[row]); h.ui.confirmMove(); h.flush(); }
+    const stale = copy(h.data[KEYS.save]);
+    // Check the ordering at the cleanup boundary, before any animation/finish retry.
+    const remove = h.platform.storage.remove;
+    let ledgerAtCleanup;
+    h.platform.storage.remove = key => {
+      ledgerAtCleanup = copy(h.data[KEYS.stats]);
+      return remove(key);
+    };
+    h.ui.select(2, 7); h.ui.confirmMove();
+    assert.equal(ledgerAtCleanup.results[0].id, stale.id);
+    assert.equal(h.ui.storageWarning, true); assert.equal(h.ui.saveCleared, false);
+    assert.deepEqual(h.data[KEYS.save], stale);
+    const result = copy(h.data[KEYS.stats].results[0]);
+    assert.equal(result.winner, 1);
+    const next = harness({ data: h.data }); t.after(() => next.ui.destroy());
+    assert.equal(next.ui.resumeCandidate, null); assert.equal(next.ui.modal, null);
+    next.ui.restore(); assert.equal(next.ui.state, null);
+    next.touch('mode-0'); next.touch('start'); assert.notEqual(next.ui.gameId, stale.id);
+    // A new game can end with the opposite winner, without rewriting the old result.
+    next.ui.select(0, 1); next.ui.confirmMove(); next.flush();
+    finishPvp(next, 0);
+    assert.equal(next.ui.stats.results.length, 2);
+    assert.deepEqual(next.ui.stats.results[0], result);
+    assert.equal(next.ui.stats.results[1].winner, 0);
+    h.ui.destroy();
+  }
+});
+
+test('synchronous share failure shows the existing error message without changing game or results', t => {
+  const h = harness({ shareFailure: true }); t.after(() => h.ui.destroy()); pvp(h); finishPvp(h);
+  const state = copy(h.ui.state), stats = copy(h.ui.stats);
+  h.touch('share');
+  assert.match(h.ui.shareStatus, /分享未完成/);
+  assert.match(h.ui.lastError.message, /share unavailable/);
+  assert.deepEqual(h.ui.state, state); assert.deepEqual(h.ui.stats, stats);
+  h.touch('again'); assert.equal(h.ui.state.winner, null);
 });
 
 function withinSafeArea(h, name) {

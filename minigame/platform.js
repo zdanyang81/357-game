@@ -69,7 +69,8 @@ function createPlatform(wx) {
       } catch (_) { /* Audio is optional, never block a move. */ }
     },
     vibrate() { try { wx.vibrateShort({ type: 'light', fail() {} }); } catch (_) {} },
-    share() { try { wx.shareAppMessage(shareData()); } catch (_) {} },
+    // Let the UI report synchronous unavailability; sharing never gates play.
+    share() { return wx.shareAppMessage(shareData()); },
     onTouch(fn) { touchHandlers.push(fn); return () => remove(touchHandlers, fn); },
     onTouchStart(fn) { pressHandlers.push(fn); return () => remove(pressHandlers, fn); },
     onTouchCancel(fn) { cancelHandlers.push(fn); return () => remove(cancelHandlers, fn); },
