@@ -12,6 +12,7 @@ test('preview cohort capability goes only in request header, never invitation/qu
   const session = new OnlineSession(platform, 'https://rooms.example.test', () => {}, key);
   assert.equal(await session.enter('', profile), true);
   assert.equal(requests[0].header['X-357-Access-Key'], key);
+  assert.equal(requests[0].header['Content-Type'], 'application/json');
   assert.equal(requests[0].url, 'https://rooms.example.test/v1/rooms');
   assert.equal(Object.hasOwn(requests[0].header, 'Authorization'), false);
   assert.equal(JSON.stringify(requests[0].data).includes(key), false);

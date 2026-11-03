@@ -31,6 +31,7 @@ class OnlineSession {
   request(method, path, data, auth) {
     if (!this.enabled) return Promise.reject(new Error('联网内测未开放：尚未配置 HTTPS 服务'));
     const header = auth ? { Authorization: 'Bearer ' + this.token } : {};
+    if (data !== undefined) header['Content-Type'] = 'application/json';
     if (this.accessKey) header['X-357-Access-Key'] = this.accessKey;
     return this.p.request({ url: this.base + path, method, data, header, timeout: 8000 }).then(res => {
       if (!res || res.statusCode < 200 || res.statusCode >= 300) {
