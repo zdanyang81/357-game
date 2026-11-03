@@ -11,9 +11,11 @@ function validRoom(room) {
       (room.status === 'finished') === (room.game.winner !== null));
 }
 class OnlineSession {
-  constructor(platform, base, changed) {
+  constructor(platform, base, changed, accessKey) {
     this.p = platform; this.base = typeof base === 'string' ? base.replace(/\/$/, '') : '';
     this.enabled = /^https:\/\/[^/?#]+(?:\/[^?#]*)?$/.test(this.base);
+    // A per-preview cohort capability, not player identity. Never share it in invitations.
+    this.accessKey = typeof accessKey === 'string' ? accessKey : '';
     this.changed = changed || (() => {}); this.room = null; this.token = ''; this.seat = null;
     this.busy = false; this.hidden = false; this.destroyed = false; this.epoch = 0;
     this.timer = null; this.error = ''; this.uncertain = false; this.serial = 0;
@@ -28,8 +30,9 @@ class OnlineSession {
   }
   request(method, path, data, auth) {
     if (!this.enabled) return Promise.reject(new Error('联网内测未开放：尚未配置 HTTPS 服务'));
-    return this.p.request({ url: this.base + path, method, data,
-      header: auth ? { Authorization: 'Bearer ' + this.token } : {}, timeout: 8000 }).then(res => {
+    const header = auth ? { Authorization: 'Bearer ' + this.token } : {};
+    if (this.accessKey) header['X-357-Access-Key'] = this.accessKey;
+    return this.p.request({ url: this.base + path, method, data, header, timeout: 8000 }).then(res => {
       if (!res || res.statusCode < 200 || res.statusCode >= 300) {
         const detail = res && res.data && res.data.error;
         const error = new Error(detail && detail.message || '服务暂不可用');

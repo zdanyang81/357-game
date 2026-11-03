@@ -2,12 +2,15 @@
 
 const http = require('node:http');
 const net = require('node:net');
+const crypto = require('node:crypto');
 const { createRoomService, RoomError, CODE } = require('./rooms');
 const MAX_BODY = 180 * 1024;
 function createHTTPServer(options = {}) {
   const service = options.service || createRoomService(options);
   const limits = new Map(), now = options.now || Date.now;
   const maxIPs = options.maxIPs || 1000;
+  const accessKey = options.accessKey || '';
+  if (accessKey && !/^[a-f0-9]{64}$/.test(accessKey)) throw new Error('Invalid internal-test access configuration');
   function rate(ip, kind) {
     const time = now();
     for (const [key, bucket] of limits) if (time >= bucket.until) limits.delete(key);
@@ -56,6 +59,13 @@ function createHTTPServer(options = {}) {
       if (req.method === 'POST' && url.pathname === '/v1/rooms') kind = 'create';
       else if (req.method === 'POST' && /\/join$/.test(url.pathname)) kind = 'join';
       rate(ip, kind);
+      if (accessKey) {
+        const supplied = req.headers['x-357-access-key'];
+        if (typeof supplied !== 'string' || !/^[a-f0-9]{64}$/.test(supplied) ||
+            !crypto.timingSafeEqual(Buffer.from(supplied), Buffer.from(accessKey))) {
+          throw new RoomError(403, 'INTERNAL_TEST_ONLY', '当前入口仅向本次内测构建开放');
+        }
+      }
       if (kind === 'create') {
         const body = await readBody(req);
         if (Object.keys(body).length !== 1 || !Object.hasOwn(body, 'profile')) throw new RoomError(400, 'INVALID_PROFILE', '仅接受本局头像资料');
@@ -88,6 +98,7 @@ function createHTTPServer(options = {}) {
       // Deliberately no raw request, token, room code, body, avatar or stack logging.
     }
   });
+  server.maxConnections = 64;
   server.requestTimeout = 10000; server.headersTimeout = 5000; server.keepAliveTimeout = 3000;
   const sweep = setInterval(() => service.sweep(), 30000); sweep.unref();
   server.on('close', () => clearInterval(sweep));
@@ -98,7 +109,9 @@ if (require.main === module) {
   const host = process.env.ROOMS_HOST || '127.0.0.1', port = Number(process.env.ROOMS_PORT || 18795);
   if (host !== '127.0.0.1' && host !== '::1') throw new Error('Room service must bind loopback behind the isolated TLS proxy');
   if (!Number.isInteger(port) || port < 1024 || port > 65535) throw new Error('Invalid room service port');
-  const server = createHTTPServer({ trustLocalProxy: process.env.ROOMS_TRUST_LOCAL_PROXY === '1' });
+  const accessKey = process.env.ROOMS_ACCESS_KEY;
+  if (!/^[a-f0-9]{64}$/.test(accessKey || '')) throw new Error('Internal-test access key is required; refusing to start an open service');
+  const server = createHTTPServer({ trustLocalProxy: process.env.ROOMS_TRUST_LOCAL_PROXY === '1', accessKey });
   server.listen(port, host, () => process.stdout.write('357 isolated room service listening on loopback\n'));
   for (const signal of ['SIGTERM', 'SIGINT']) process.on(signal, () => { server.close(() => process.exit(0)); setTimeout(() => process.exit(0), 2000).unref(); });
 }

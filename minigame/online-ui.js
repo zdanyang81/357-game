@@ -5,7 +5,7 @@ module.exports = {
   initOnline() {
     this.onlineMode = false; this.onlineCode = ''; this.profileGeneration = 0;
     this.onlineProfile = { avatar: { type: 'preset', index: 0 } }; this.avatarImages = new Map();
-    this.online = new OnlineSession(this.platform, config.apiBase, () => this.onlineChanged());
+    this.online = new OnlineSession(this.platform, config.apiBase, () => this.onlineChanged(), config.accessKey);
     this.receiveInvite(this.platform.launchQuery ? this.platform.launchQuery() : {});
   },
   receiveInvite(query) {
