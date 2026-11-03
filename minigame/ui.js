@@ -34,11 +34,12 @@ class GameUI {
     this.modeChoice = this.settings.mode; this.difficultyChoice = this.settings.difficulty;
     this.stats = this.loadStats();
     this.resumeCandidate = this.loadSave();
+    this.initOnline();
     this.bind('onTouch', point => this.handleTouch(point));
     this.bind('onTouchStart', point => this.handlePress(point));
     this.bind('onTouchCancel', () => this.releasePress());
     this.bind('onHide', () => this.onHide());
-    this.bind('onShow', () => this.onShow());
+    this.bind('onShow', options => { this.receiveInvite(options && options.query); this.onShow(); });
     if (this.resumeCandidate) this.modal = { type: 'restore', page: 0 };
     this.render();
   }
@@ -123,6 +124,7 @@ class GameUI {
   }
 
   save() {
+    if (this.onlineMode) return;
     if (!this.state || !this.gameId) return;
     if (this.state.winner !== null) { this.clearSave(); return; }
     this.saveCleared = false;
@@ -188,9 +190,9 @@ class GameUI {
     this.render();
   }
 
-  isAI() { return !!this.state && this.state.mode === 'ai' && this.state.currentPlayer === 1 && this.state.winner === null; }
+  isAI() { return !this.onlineMode && !!this.state && this.state.mode === 'ai' && this.state.currentPlayer === 1 && this.state.winner === null; }
   canPlay() { return !this.destroyed && !this.hidden && this.screen === 'game' && !!this.state &&
-    this.state.winner === null && !this.locked && !this.modal && !this.isAI(); }
+    this.state.winner === null && !this.locked && !this.modal && !this.isAI() && (!this.onlineMode || this.online.canMove()); }
 
   chooseFirst(rng) {
     if (this.settings.first === 1) return true;
@@ -279,6 +281,7 @@ class GameUI {
   }
 
   commitMove(row, count) {
+    if (this.onlineMode) { if (this.canPlay()) { this.selected = null; this.online.move(row, count); } return; }
     const range = this.pickRange(this.rowSpans(), this.state.currentPlayer, row, count);
     const next = engine.move(this.state, row, count);
     // Commit before animation: pause/resume only ever continues from the new position.
@@ -302,6 +305,7 @@ class GameUI {
   }
 
   recordResult() {
+    if (this.onlineMode) return;
     if (!this.state || this.state.winner === null || this.stats.results.some(item => item.id === this.gameId)) return;
     const item = { id: this.gameId, winner: this.state.winner, mode: this.state.mode,
       difficulty: this.state.difficulty, assisted: this.assisted, at: Date.now() };
@@ -311,6 +315,7 @@ class GameUI {
   }
 
   finish() {
+    if (this.onlineMode) { this.modal = { type: 'online-result' }; this.render(); return; }
     this.locked = false; this.phase = 'idle'; this.motion = null;
     this.recordResult(); if (this.statsDirty) this.persistStats(); this.save();
     this.modal = { type: 'result', page: 0 }; this.render();
@@ -329,6 +334,7 @@ class GameUI {
   }
 
   goHome() {
+    if (this.onlineMode) { this.leaveOnline(); return; }
     this.invalidate();
     // Leaving the board drops the in-progress match. A finished game only clears its save.
     if (this.state && this.state.winner === null) this.clearSave();
@@ -339,20 +345,20 @@ class GameUI {
 
   onHide() {
     if (this.destroyed) return;
-    this.hidden = true; this.invalidate(); this.save();
+    this.hidden = true; this.cancelOnlineAvatar(); this.online.setHidden(true); this.invalidate(); this.save();
     if (this.state && this.state.winner !== null) { this.recordResult(); if (this.statsDirty) this.persistStats(); }
   }
 
   onShow() {
     if (this.destroyed || !this.hidden) return;
-    this.hidden = false;
+    this.hidden = false; this.online.setHidden(false);
     if (this.screen === 'game' && this.state && this.state.winner !== null && !this.modal) this.finish();
     else { this.render(); this.scheduleAI(); }
   }
 
   destroy() {
     if (this.destroyed) return;
-    this.save(); this.invalidate(); this.destroyed = true;
+    this.save(); this.invalidate(); this.cancelOnlineAvatar(); this.online.destroy(); this.avatarImages.clear(); this.destroyed = true;
     this.unsubscribers.forEach(off => { try { off(); } catch (error) { this.lastError = error; } });
     this.unsubscribers = []; this.hitBoxes = []; this.selected = null;
   }
@@ -554,7 +560,8 @@ class GameUI {
     const c = this.ctx; c.save();
     try {
       this.background();
-      if (this.screen === 'game' && this.state) this.drawGame(); else this.drawHome();
+      if (this.screen === 'game' && this.state) this.drawGame();
+      else if (this.screen === 'online') this.drawOnline(); else this.drawHome();
       if (this.modal) {
         this.hitBoxes = []; // Never route through a modal to the underlying board.
         c.fillStyle = 'rgba(0,10,7,0.78)'; c.fillRect(0, 0, this.width, this.height); this.drawModal();
@@ -619,8 +626,10 @@ class GameUI {
       if (this.resumeCandidate) this.openModal('restore'); else this.startGame();
     }, { primary: true, size: 17 });
     y += 52;
-    this.button('rules', '简短规则', x, y, half, 44, () => this.openModal('rules'));
-    this.button('stats', '本地战绩', x + half + 8, y, half, 44, () => this.openModal('stats'));
+    const third = (span - 12) / 3;
+    this.button('rules', '简短规则', x, y, third, 44, () => this.openModal('rules'), { size: 12 });
+    this.button('stats', '本地战绩', x + third + 6, y, third, 44, () => this.openModal('stats'), { size: 12 });
+    this.button('online', '好友联网', x + (third + 6) * 2, y, third, 44, () => this.openOnline(), { size: 12 });
     if ((this.toast || this.storageWarning) && y + 60 < this.bottom)
       this.text(this.toast || '本地存储不可用，进度可能无法保留', w / 2, y + 58, 12, GOLD, 'center', 'normal', span);
   }
@@ -631,7 +640,7 @@ class GameUI {
     this.render();
   }
 
-  playerName(player) { return this.state.mode === 'ai' ? (player === 1 ? '电脑' : '你') : (player === 0 ? '玩家一' : '玩家二'); }
+  playerName(player) { if (this.onlineMode) return player === this.online.seat ? '你' : '对手'; return this.state.mode === 'ai' ? (player === 1 ? '电脑' : '你') : (player === 0 ? '玩家一' : '玩家二'); }
 
   drawGame() {
     const w = this.width, x = 20, span = w - 40;
@@ -642,19 +651,21 @@ class GameUI {
     let y = this.top + 10 + Math.max(0, (available - rowHeight * 3) / 2);
     this.button('back', '返回', x, y, 58, 44, () => this.openModal('leave'));
     this.logo(w / 2, y + 13, 22, { mini: true });
-    this.text(this.state.mode === 'pvp' ? '同屏双人' : 'AI · ' + LEVELS[this.state.difficulty], w / 2, y + 38, 12, MUTED, 'center');
-    this.button('restart', '重开', w - 78, y, 58, 44, () => this.openModal('restart'));
+    this.text(this.onlineMode ? '联网内测 · ' + this.online.room.code : this.state.mode === 'pvp' ? '同屏双人' : 'AI · ' + LEVELS[this.state.difficulty], w / 2, y + 38, 12, MUTED, 'center');
+    if (this.onlineMode) this.button('online-refresh', '刷新', w - 78, y, 58, 44, () => this.online.refresh(), { disabled: this.online.busy });
+    else this.button('restart', '重开', w - 78, y, 58, 44, () => this.openModal('restart'));
     y += 52;
     const half = (span - 8) / 2;
     [0, 1].forEach(player => {
       const bx = x + player * (half + 8), active = this.state.currentPlayer === player && this.state.winner === null;
       this.panel(bx, y, half, 58, active ? '#2c4b34' : '#123127', active ? GOLD : '#34513e', 12);
-      this.avatar(this.state.avatars[player], bx + 5, y + 7, 43);
+      if (this.onlineMode) this.onlineAvatar(this.online.room.players[player] && this.online.room.players[player].profile, this.state.avatars[player], bx + 5, y + 7, 43);
+      else this.avatar(this.state.avatars[player], bx + 5, y + 7, 43);
       this.text(this.playerName(player), bx + 56, y + 19, 14, active ? GOLD : INK, 'left', 'bold');
       this.text(active ? '当前回合' : this.state.winner === player ? '获胜' : '等待', bx + 56, y + 40, 12, MUTED);
     });
     y += 73;
-    const status = this.state.winner !== null ? '本局结束 · 拿最后一颗的人输' : this.phase === 'thinking' ? '电脑正在思考…' :
+    const status = this.onlineMode && this.online.error ? this.online.error : this.onlineMode && this.online.busy ? '正在确认服务端状态…' : this.state.winner !== null ? '本局结束 · 拿最后一颗的人输' : this.phase === 'thinking' ? '电脑正在思考…' :
       this.phase === 'animating' ? this.toast : this.selected ? '第 ' + (this.selected.row + 1) + ' 排 · 已选' + (this.state.currentPlayer === 0 ? '左' : '右') + '起 ' + this.selected.count + ' 颗' :
       this.playerName(this.state.currentPlayer) + '：点一颗骰子，从' + (this.state.currentPlayer === 0 ? '左' : '右') + '边起选 N 颗';
     this.text(status, w / 2, y, 13, GOLD, 'center', 'normal', span); y += 17;
@@ -730,8 +741,14 @@ class GameUI {
       case 'rules':
         content = '① 双方轮流，每回合只能从一排拿至少一颗。\n\n② 拿最后一颗的人输。\n\n③ 左边的一方从左往右拿，右边的一方从右往左拿：点一颗骰子即选中到它为止的 N 颗，确认拿取 / 取消。';
         break;
+      case 'online-result':
+        this.text(this.playerName(this.state.winner) + '获胜', innerX, y + 85, 22, GOLD);
+        this.text('联网对局不计入本地战绩', innerX, y + 125, 14, MUTED);
+        this.button('online-result-leave', '离开房间', innerX, bottomY, innerW, 44, () => this.leaveOnline(), { disabled: this.online.busy });
+        if (this.online.error) this.text(this.online.error, innerX, y + 166, 12, GOLD, 'left', 'normal', innerW);
+        return;
       case 'leave':
-        content = '离开后这一局不会保留。\n\n未结束的对局不会计入战绩。';
+        content = this.onlineMode ? '离开将关闭双方的房间并撤销会话；本局不计入本地战绩。' : '离开后这一局不会保留。\n\n未结束的对局不会计入战绩。';
         actions = [['继续玩', () => this.closeModal()], ['离开', () => this.goHome()]];
         break;
       case 'restart':
@@ -830,5 +847,6 @@ class GameUI {
   }
 }
 
+Object.assign(GameUI.prototype, require('./online-ui'));
 module.exports = GameUI;
 module.exports.GameUI = GameUI;

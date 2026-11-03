@@ -656,3 +656,48 @@ test('destroy cancels timers, unsubscribes callbacks, and rejects already queued
   for (const set of Object.values(h.listeners)) assert.equal(set.size, 0);
   assert.equal(h.ui.destroyed, true);
 });
+
+test('online lobby is bounded on narrow screen; invites only prefill and never autojoin', t => {
+  const h = harness({ safeTop: 84 }); t.after(() => h.ui.destroy());
+  let requests = 0; h.platform.request = () => { requests++; throw new Error('unexpected'); };
+  h.emit('show', { query: { room: 'ABCDEFG2', apiBase: 'https://evil', token: 'evil' } });
+  assert.equal(h.ui.screen, 'home'); assert.equal(h.ui.onlineCode, 'ABCDEFG2'); assert.equal(requests, 0);
+  h.touch('online'); withinSafeArea(h, 'online lobby');
+  assert.equal(h.ui.online.enabled, false);
+  assert.equal(h.ui.hitBoxes.find(b => b.id === 'online-create').disabled, true);
+  h.emit('show', { query: { room: 'BCDEFGH2' } }); assert.equal(h.ui.onlineCode, 'BCDEFGH2'); assert.equal(requests, 0);
+  h.ui.online.enabled = true;
+  h.emit('show', { query: { room: 'ABCDEF89' } }); assert.equal(h.ui.onlineCode, 'ABCDEF89');
+  assert.equal(h.ui.hitBoxes.find(b => b.id === 'online-join').disabled, false);
+  h.ui.onlineCode = 'ABCDEFIO'; h.ui.render();
+  assert.equal(h.ui.hitBoxes.find(b => b.id === 'online-join').disabled, true);
+});
+
+test('network board only accepts own turn; no local AI, optimistic move, save or result ledger', async t => {
+  const h = harness(); t.after(() => h.ui.destroy()); h.touch('online');
+  const profile = { avatar: { type: 'preset', index: 0 } };
+  h.ui.online.room = { code: 'ABCDEFG2', revision: 1, status: 'playing', players: [{ seat: 0, profile }, { seat: 1, profile }], game: engine.createGame({ mode: 'pvp' }) };
+  h.ui.online.token = 'session-token'; h.ui.online.seat = 1; h.ui.onlineChanged();
+  assert.equal(h.ui.canPlay(), false); h.ui.scheduleAI(); assert.equal(h.timers.size, 0);
+  h.ui.online.seat = 0; assert.equal(h.ui.canPlay(), true);
+  let sent = 0; h.ui.online.move = async (row, count) => { sent++; assert.equal(row, 0); assert.equal(count, 1); };
+  h.ui.select(0, 1); h.ui.confirmMove(); assert.equal(sent, 1); assert.equal(h.ui.state.history.length, 0);
+  h.ui.save(); assert.equal(h.data[KEYS.save], undefined);
+  let state = h.ui.state;
+  while (state.winner === null) { const row = state.piles.findIndex(n => n > 0); state = engine.move(state, row, state.piles[row]); }
+  h.ui.online.room.game = state; h.ui.online.room.status = 'finished'; h.ui.onlineChanged();
+  h.ui.finish(); h.emit('hide'); h.emit('show');
+  assert.equal(h.ui.stats.results.length, 0); assert.equal(h.data[KEYS.save], undefined);
+  assert.equal(h.ui.modal.type, 'online-result'); assert.ok(!h.ui.hitBoxes.some(b => b.id === 'again'));
+});
+
+test('avatar refusal and late choice preserve playable preset without sending any image', async t => {
+  const h = harness(); t.after(() => h.ui.destroy()); h.touch('online');
+  h.platform.chooseAlbumAvatar = () => Promise.reject(new Error('privacy denied'));
+  await h.ui.chooseOnlineAvatar('album'); assert.equal(h.ui.onlineProfile.avatar.type, 'preset'); assert.match(h.ui.online.error, /privacy denied/);
+  let resolve; h.platform.chooseAlbumAvatar = () => new Promise(done => { resolve = done; });
+  const pending = h.ui.chooseOnlineAvatar('album'); h.emit('hide');
+  resolve({ avatar: { type: 'image', data: 'data:image/png;base64,aGVsbG8=' } }); await pending;
+  assert.equal(h.ui.onlineProfile.avatar.type, 'preset');
+  h.emit('show'); assert.equal(h.ui.profileBusy, false); assert.equal(h.ui.online.token, '');
+});

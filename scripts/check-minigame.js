@@ -23,12 +23,21 @@ function walk(dir) {
         const source = fs.readFileSync(file, 'utf8');
         assert(!/\b(document|localStorage)\s*\./.test(source), 'Browser-only API: ' + file);
         assert(!/\beval\s*\(/.test(source), 'Dynamic code execution: ' + file);
-        assert(!/\bwx\.(request|connectSocket|login|getUserProfile)\s*\(/.test(source), 'Unexpected network/identity dependency: ' + file);
+        assert(!/\bwx\.(connectSocket|login|getUserProfile|uploadFile)\s*\(/.test(source), 'Unexpected identity/socket/upload dependency: ' + file);
+        if (path.relative(root, file) !== path.join('minigame', 'platform.js')) {
+          assert(!/\bwx\.(request|downloadFile|chooseMedia|chooseImage|createUserInfoButton)\s*\(/.test(source), 'Platform APIs must remain in the reviewed adapter: ' + file);
+        }
       }
     }
   }
 }
 walk(path.join(root, 'minigame'));
+const onlineConfig = require(path.join(root, 'minigame/online-config'));
+if (onlineConfig.apiBase) {
+  const endpoint = new URL(onlineConfig.apiBase);
+  assert(endpoint.protocol === 'https:' && !endpoint.username && !endpoint.password && !endpoint.search && !endpoint.hash,
+    'Online rooms require an explicit HTTPS build endpoint without credentials or query');
+}
 assert(size < 2 * 1024 * 1024, 'Exceeded our conservative 2 MiB development budget');
 console.log(`Package preflight passed: ${files} files, ${size} bytes (own budget 2 MiB, not platform certification)`);
 if (effectiveAppId === 'touristappid') console.log('NOT RELEASE READY: real game AppID, platform qualifications, and WeChat device acceptance still required.');
