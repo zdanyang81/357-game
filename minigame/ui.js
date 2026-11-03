@@ -75,7 +75,10 @@ class GameUI {
     const avatars = Array.isArray(value.avatars) && value.avatars.length === 2 &&
       value.avatars.every(n => Number.isInteger(n) && n >= 0 && n < 6) ? value.avatars.slice() : [0, 3];
     if (avatars[0] === avatars[1]) avatars[1] = (avatars[1] + 1) % 6;
-    return { sound: value.sound !== false, vibration: value.vibration !== false, aiFirst: value.aiFirst === true,
+    const first = value.first === 0 || value.first === 1 || value.first === 'random' ? value.first
+      : (value.aiFirst === true ? 1 : 0);
+    return { sound: value.sound !== false, vibration: value.vibration !== false,
+      first, aiFirst: first === 1,
       mode: value.mode === 'pvp' ? 'pvp' : 'ai',
       difficulty: Object.prototype.hasOwnProperty.call(LEVELS, value.difficulty) ? value.difficulty : 'easy', avatars };
   }
@@ -102,9 +105,12 @@ class GameUI {
       // A finished game is already in the stats ledger and has nothing left to resume.
       if (state.winner !== null) return null;
       if (!Array.isArray(state.history) || state.history.length > 15) return null;
-      // Replay protects even when an engine validator checks only the outer shape.
+      // Replay from whoever actually opened, so an older local match that stored
+      // aiFirst without giving that side the first move can still resume.
+      const opener = state.history.length ? state.history[0].player : state.currentPlayer;
+      if (opener !== 0 && opener !== 1) return null;
       let replay = engine.createGame({ mode: state.mode, difficulty: state.difficulty,
-        aiFirst: state.aiFirst, avatars: state.avatars });
+        aiFirst: opener === 1, avatars: state.avatars });
       for (const step of state.history) {
         if (step.player !== replay.currentPlayer) return null;
         replay = engine.move(replay, step.row, step.count);
@@ -184,12 +190,29 @@ class GameUI {
   canPlay() { return !this.destroyed && !this.hidden && this.screen === 'game' && !!this.state &&
     this.state.winner === null && !this.locked && !this.modal && !this.isAI(); }
 
+  chooseFirst(rng) {
+    if (this.settings.first === 1) return true;
+    if (this.settings.first !== 'random') return false;
+    const random = typeof rng === 'function' ? rng
+      : (typeof this.platform.random === 'function' ? this.platform.random : Math.random);
+    const value = random();
+    if (typeof value !== 'number' || !Number.isFinite(value) || value < 0 || value >= 1) {
+      throw new Error('随机数必须在 [0,1) 内');
+    }
+    return value >= 0.5;
+  }
+
   startGame(options) {
     if (this.destroyed) return;
     try {
-      const opts = options || { mode: this.modeChoice, difficulty: this.difficultyChoice,
-        aiFirst: this.settings.aiFirst, avatars: this.settings.avatars.slice() };
-      const next = engine.createGame(opts);
+      const base = options ? { ...options } : {
+        mode: this.modeChoice, difficulty: this.difficultyChoice,
+        avatars: this.settings.avatars.slice()
+      };
+      const rng = base.rng;
+      delete base.rng;
+      if (typeof base.aiFirst !== 'boolean') base.aiFirst = this.chooseFirst(rng);
+      const next = engine.createGame(base);
       this.invalidate(); this.state = next;
       this.gameId = Date.now().toString(36) + '-' + (++this.serial) + '-' + Math.random().toString(36).slice(2, 10);
       this.assisted = false; this.selected = null; this.modal = null; this.toast = ''; this.shareStatus = '';
@@ -200,8 +223,10 @@ class GameUI {
 
   restart() {
     if (!this.state) return;
+    // A fixed choice keeps this game's opener. Random rolls again.
+    const sameSide = this.settings.first === 'random' ? {} : { aiFirst: this.state.aiFirst };
     this.startGame({ mode: this.state.mode, difficulty: this.state.difficulty,
-      aiFirst: this.state.aiFirst, avatars: this.state.avatars.slice() });
+      avatars: this.state.avatars.slice(), ...sameSide });
   }
 
   restore() {
@@ -300,7 +325,11 @@ class GameUI {
   }
 
   goHome() {
-    this.invalidate(); this.save(); this.resumeCandidate = this.loadSave();
+    this.invalidate();
+    // Leaving the board drops the in-progress match. A finished game only clears its save.
+    if (this.state && this.state.winner === null) this.clearSave();
+    else this.save();
+    this.state = null; this.gameId = null; this.resumeCandidate = null;
     this.screen = 'home'; this.modal = null; this.selected = null; this.toast = ''; this.render();
   }
 
@@ -381,10 +410,14 @@ class GameUI {
 
   button(id, label, x, y, w, h, action, options) {
     const opts = options || {}, disabled = !!opts.disabled, pressed = !disabled && this.pressed === id;
-    this.panel(x, y, w, h, disabled ? '#1b352e' : opts.primary ? (pressed ? '#bf9d5c' : GOLD) : pressed ? '#28523f' : '#193e32',
-      disabled ? '#2e493f' : opts.primary ? '#efd397' : pressed ? GOLD : '#416250', 11);
+    const selected = !disabled && !opts.primary && !!opts.selected;
+    const fill = disabled ? '#1b352e' : opts.primary ? (pressed ? '#bf9d5c' : GOLD)
+      : pressed ? '#28523f' : selected ? '#31513a' : '#193e32';
+    const border = disabled ? '#2e493f' : opts.primary ? '#efd397' : (pressed || selected) ? GOLD : '#416250';
+    this.panel(x, y, w, h, fill, border, 11);
     this.text(label, x + w / 2, y + h / 2, opts.size || 14,
-      disabled ? '#789085' : opts.primary ? '#172b23' : INK, 'center', opts.primary ? 'bold' : 'normal', w - 12);
+      disabled ? '#789085' : opts.primary ? '#172b23' : selected ? GOLD : INK,
+      'center', opts.primary || selected ? 'bold' : 'normal', w - 12);
     this.hit(id, x, y, w, h, action, disabled);
   }
 
@@ -552,9 +585,19 @@ class GameUI {
       });
     });
     y += 114;
-    this.button('ai-first', '电脑先手  ' + (this.settings.aiFirst ? '已开启' : '已关闭'), x, y, span, 44, () => {
-      this.settings.aiFirst = !this.settings.aiFirst; this.store(KEYS.settings, this.settings); this.render();
-    }, { disabled: this.modeChoice === 'pvp' });
+    const starters = this.modeChoice === 'ai'
+      ? [[0, '你先'], [1, '电脑先'], ['random', '随机']]
+      : [[0, '玩家一'], [1, '玩家二'], ['random', '随机']];
+    const gap = 8, chip = Math.floor((span - gap * 2) / 3), extra = span - (chip * 3 + gap * 2);
+    starters.forEach((item, i) => {
+      const bw = chip + (i === starters.length - 1 ? extra : 0);
+      const bx = x + i * (chip + gap);
+      this.button('first-' + item[0], item[1], bx, y, bw, 44, () => {
+        this.settings.first = item[0];
+        this.settings.aiFirst = item[0] === 1;
+        this.store(KEYS.settings, this.settings); this.render();
+      }, { selected: this.settings.first === item[0] });
+    });
     y += step;
     [0, 1].forEach(player => {
       const bx = x + player * (half + 8);
@@ -684,16 +727,18 @@ class GameUI {
         content = '① 双方轮流，每回合只能从一排拿至少一颗。\n\n② 拿最后一颗的人输。\n\n③ 左边的一方从左往右拿，右边的一方从右往左拿：点一颗骰子即选中到它为止的 N 颗，确认拿取 / 取消。';
         break;
       case 'leave':
-        content = '当前对局会保留在本机。\n\n返回后可从首页继续，也可选择新开一局。';
-        actions = [['继续玩', () => this.closeModal()], ['保存并返回', () => this.goHome()]];
+        content = '离开后这一局不会保留。\n\n未结束的对局不会计入战绩。';
+        actions = [['继续玩', () => this.closeModal()], ['离开', () => this.goHome()]];
         break;
       case 'restart':
-        content = '将放弃当前棋盘，按相同模式、先手和头像重新开始。\n\n未结束的对局不会计入战绩。';
+        content = this.settings.first === 'random'
+          ? '将放弃当前棋盘，按相同模式和头像重新开始，先手重新随机。\n\n未结束的对局不会计入战绩。'
+          : '将放弃当前棋盘，按相同模式、先手和头像重新开始。\n\n未结束的对局不会计入战绩。';
         actions = [['继续本局', () => this.closeModal()], ['确认重开', () => this.restart()]];
         break;
       case 'history':
         content = this.state.history.length ? this.state.history.map((step, index) =>
-          (index + 1) + '. ' + this.playerName(step.player) + ' · 第' + (step.row + 1) + '排取' + step.count + '颗\n   剩余 ' + step.piles.join(' / ')).join('\n\n') : '还没有落子，第一手由你书写。';
+          (index + 1) + '. ' + this.playerName(step.player) + ' · 第' + (step.row + 1) + '排取' + step.count + '颗\n   剩余 ' + step.piles.join(' / ')).join('\n\n') : '还没有落子。';
         break;
       case 'stats': {
         const results = this.stats.results, solo = results.filter(item => item.mode === 'ai');

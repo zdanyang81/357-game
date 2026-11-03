@@ -98,6 +98,44 @@ function harness(options = {}) {
   return h;
 }
 
+test('existing three-way opener works in both modes and random rerolls on restart', t => {
+  for (const mode of ['ai', 'pvp']) for (const first of [0, 1, 'random']) {
+    const h = harness(); t.after(() => h.ui.destroy());
+    h.touch(mode === 'ai' ? 'mode-1' : 'mode-0'); h.touch('first-' + first);
+    h.platform.random = () => 0.9;
+    h.touch('start'); assert.equal(h.ui.state.currentPlayer, first === 0 ? 0 : 1);
+    h.platform.random = () => 0.1; h.ui.restart();
+    assert.equal(h.ui.state.currentPlayer, first === 1 ? 1 : 0);
+    assert.ok(engine.validateState(h.ui.state));
+  }
+});
+
+test('existing home exit abandons an unfinished match and does not restore it on relaunch', t => {
+  const h = harness(); pvp(h); h.ui.select(0, 1); h.ui.confirmMove(); h.flush();
+  h.touch('back'); h.touch('modal-action-1');
+  assert.equal(h.ui.screen, 'home'); assert.equal(h.ui.state, null);
+  assert.equal(h.data[KEYS.save], null); assert.equal(h.ui.stats.results.length, 0);
+  h.emit('hide'); h.ui.destroy();
+  const next = harness({ data: h.data }); t.after(() => next.ui.destroy());
+  assert.equal(next.ui.modal, null); assert.equal(next.ui.resumeCandidate, null);
+  next.touch('start'); assert.equal(next.ui.state.history.length, 0);
+});
+
+test('existing opener compatibility restores legacy local saves with aiFirst set but left opener', t => {
+  for (const turns of [0, 1]) {
+    let state = engine.createGame({ mode: 'pvp', aiFirst: false });
+    if (turns) state = engine.move(state, 0, 1);
+    state.aiFirst = true;
+    assert.ok(engine.validateState(state));
+    const h = harness({ data: { [KEYS.save]: { version: 1, id: 'legacy-local', state, assisted: false } } });
+    t.after(() => h.ui.destroy());
+    assert.equal(h.ui.modal.type, 'restore'); h.touch('modal-action-1');
+    assert.deepEqual(h.ui.state, state); assert.equal(h.ui.timers.size, 0);
+    h.ui.select(1, 1); h.ui.confirmMove(); h.flush();
+    assert.ok(engine.validateState(h.ui.state));
+  }
+});
+
 function withinSafeArea(h, name) {
   const u = h.ui;
   for (const b of u.hitBoxes) {
@@ -317,7 +355,7 @@ test('corrupt, forged and unsupported saves are safely ignored', t => {
 });
 
 test('settings remember difficulty/mode/AI-first/sound/vibration and distinct avatars', t => {
-  const h = harness(); h.touch('mode-3'); h.touch('ai-first'); h.touch('sound'); h.touch('vibration');
+  const h = harness(); h.touch('mode-3'); h.touch('first-1'); h.touch('sound'); h.touch('vibration');
   h.touch('avatar-0'); h.touch('choose-avatar-3');
   assert.deepEqual(h.ui.settings.avatars, [3, 0]);
   h.touch('avatar-1'); h.touch('choose-avatar-3'); assert.deepEqual(h.ui.settings.avatars, [0, 3]);
