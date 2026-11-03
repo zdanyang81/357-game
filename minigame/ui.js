@@ -345,7 +345,11 @@ class GameUI {
 
   onHide() {
     if (this.destroyed) return;
-    this.hidden = true; this.cancelOnlineAvatar(); this.online.setHidden(true); this.invalidate(); this.save();
+    this.hidden = true;
+    // A native album picker can itself hide the game. Preserve only its exact pending
+    // owner; explicit cancel/leave/destroy still retire the operation and generation.
+    if (!this.hasPendingAlbumOperation()) this.cancelOnlineAvatar();
+    this.online.setHidden(true); this.invalidate(); this.save();
     if (this.state && this.state.winner !== null) { this.recordResult(); if (this.statsDirty) this.persistStats(); }
   }
 

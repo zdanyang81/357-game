@@ -3,7 +3,7 @@ const { OnlineSession, inviteCode, normalizeCode, CODE } = require('./online');
 const config = require('./online-config');
 module.exports = {
   initOnline() {
-    this.onlineMode = false; this.onlineCode = ''; this.profileGeneration = 0;
+    this.onlineMode = false; this.onlineCode = ''; this.profileGeneration = 0; this.avatarOperation = null;
     this.onlineProfile = { avatar: { type: 'preset', index: 0 } }; this.avatarImages = new Map();
     this.online = new OnlineSession(this.platform, config.apiBase, () => this.onlineChanged(), config.accessKey);
     this.receiveInvite(this.platform.launchQuery ? this.platform.launchQuery() : {});
@@ -54,12 +54,16 @@ module.exports = {
   async chooseOnlineAvatar(kind) {
     if (this.online.room || this.profileBusy) return;
     this.cancelOnlineAvatar(); const generation = this.profileGeneration;
+    const operation = { kind, generation }; this.avatarOperation = operation;
     this.profileBusy = true; this.online.error = ''; this.render();
     const accept = (error, profile) => {
-      if (this.destroyed || !this.onlineMode || generation !== this.profileGeneration) return;
+      if (this.destroyed || !this.onlineMode || generation !== this.profileGeneration || this.avatarOperation !== operation) return;
       this.profileBusy = false;
-      if (error) this.online.error = error.message;
-      else { this.onlineProfile = profile; this.online.error = '头像仅在确认入房后发送；微信头像是否非灰以实际预览为准'; this.cancelOnlineAvatar(); }
+      if (error) {
+        // Album selection resolves once; a live WeChat authorization button can be tapped again.
+        if (kind === 'album') this.avatarOperation = null;
+        this.online.error = error.message;
+      } else { this.avatarOperation = null; this.onlineProfile = profile; this.online.error = '头像仅在确认入房后发送；微信头像是否非灰以实际预览为准'; this.cancelOnlineAvatar(); }
       this.render();
     };
     try {
@@ -72,8 +76,13 @@ module.exports = {
       }
     } catch (error) { accept(error); }
   },
+  hasPendingAlbumOperation() {
+    const operation = this.avatarOperation;
+    return !!operation && operation.kind === 'album' && operation.generation === this.profileGeneration &&
+      this.profileBusy && this.onlineMode && this.screen === 'online' && !this.online.room && !this.destroyed;
+  },
   cancelOnlineAvatar() {
-    this.profileGeneration++; this.profileBusy = false;
+    this.profileGeneration++; this.avatarOperation = null; this.profileBusy = false;
     if (this.platform.cancelWechatAvatar) this.platform.cancelWechatAvatar();
   },
   async leaveOnline() {
@@ -127,13 +136,13 @@ module.exports = {
       this.button('online-album', '自选相册图片', x, y, half, 44, () => this.chooseOnlineAvatar('album'), { disabled: this.profileBusy || this.online.busy });
       this.button('online-wechat', '自愿微信头像', x + half + 8, y, half, 44, () => this.chooseOnlineAvatar('wechat'), { disabled: this.profileBusy || this.online.busy }); y += 46;
       this.button('online-avatar-cancel', '取消授权入口 / 继续用当前形象', x, y, span, 44, () => { this.cancelOnlineAvatar(); this.render(); }); y += 48;
-      this.button('online-code', '房间码：' + (this.onlineCode || '点击输入'), x, y, span, 44, () => this.inputOnlineCode(), { disabled: this.online.busy }); y += 46;
+      this.button('online-code', '加入房间码：' + (this.onlineCode || '仅加入时填写'), x, y, span, 44, () => this.inputOnlineCode(), { disabled: this.online.busy }); y += 46;
       const disabled = this.online.busy || this.profileBusy || this.online.creationUnknown || !this.online.enabled;
-      this.button('online-create', '创建房间', x, y, half, 44, () => this.enterOnline(false), { disabled, primary: true });
+      this.button('online-create', '随机创建房间', x, y, half, 44, () => this.enterOnline(false), { disabled, primary: true });
       this.button('online-join', '确认加入', x + half + 8, y, half, 44, () => this.enterOnline(true), { disabled: disabled || !CODE.test(this.onlineCode) }); y += 52;
     }
     this.button('online-back', room ? '离开并关闭房间' : '返回离线玩法', x, y, span, 44, () => this.leaveOnline(), { disabled: this.online.busy }); y += 52;
-    const message = this.online.error || (!this.online.enabled ? '联网未开放：尚未配置HTTPS服务' : '头像可不选；联网对局不计入本地战绩');
+    const message = this.online.error || (!this.online.enabled ? '联网未开放：尚未配置HTTPS服务' : '创建自动生成随机码；加入才需填写房间码');
     this.wrap(message, span, 12).slice(0, Math.max(1, Math.floor((this.bottom - y) / 18))).forEach((line, i) =>
       this.text(line, x, y + i * 18, 12, '#d8b674'));
   }

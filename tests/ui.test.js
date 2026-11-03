@@ -673,6 +673,20 @@ test('online lobby is bounded on narrow screen; invites only prefill and never a
   assert.equal(h.ui.hitBoxes.find(b => b.id === 'online-join').disabled, true);
 });
 
+test('random room creation never requires or submits the code field reserved for joining', async t => {
+  const h = harness(); t.after(() => h.ui.destroy()); h.touch('online');
+  h.ui.online.enabled = true;
+  const submitted = []; let confirmations = 0;
+  h.platform.confirmProfile = async () => { confirmations++; return true; };
+  h.ui.online.enter = async code => { submitted.push(code); return true; };
+  for (const joinCode of ['', 'ABCDEF89', 'INVALID1']) {
+    h.ui.onlineCode = joinCode; h.ui.render();
+    assert.equal(h.ui.hitBoxes.find(b => b.id === 'online-create').disabled, false);
+    await h.ui.enterOnline(false);
+  }
+  assert.deepEqual(submitted, ['', '', '']); assert.equal(confirmations, 3);
+});
+
 test('network board only accepts own turn; no local AI, optimistic move, save or result ledger', async t => {
   const h = harness(); t.after(() => h.ui.destroy()); h.touch('online');
   const profile = { avatar: { type: 'preset', index: 0 } };
@@ -691,12 +705,93 @@ test('network board only accepts own turn; no local AI, optimistic move, save or
   assert.equal(h.ui.modal.type, 'online-result'); assert.ok(!h.ui.hitBoxes.some(b => b.id === 'again'));
 });
 
+test('album picker ownership survives native hide/show and fills preview without automatic upload', async t => {
+  for (const resolveWhileHidden of [false, true]) {
+    const h = harness(); t.after(() => h.ui.destroy()); h.touch('online');
+    let resolve, sent = 0;
+    h.platform.chooseAlbumAvatar = () => new Promise(done => { resolve = done; });
+    h.platform.request = () => { sent++; throw new Error('unexpected upload'); };
+    const profile = { avatar: { type: 'image', data: 'data:image/png;base64,YWxidW0=' } };
+    const pending = h.ui.chooseOnlineAvatar('album');
+    h.emit('hide');
+    assert.equal(h.ui.profileBusy, true, 'native picker still owns its pending operation');
+    if (!resolveWhileHidden) h.emit('show');
+    resolve(profile); await pending;
+    if (resolveWhileHidden) h.emit('show');
+    assert.deepEqual(h.ui.onlineProfile, profile); assert.equal(h.ui.profileBusy, false);
+    assert.equal(sent, 0); assert.equal(h.ui.online.token, '');
+  }
+});
+
+test('album late callbacks after cancel, leave, destroy or changing operation remain invalid', async t => {
+  for (const action of ['cancel', 'leave', 'destroy', 'preset', 'replace']) {
+    const h = harness(); t.after(() => h.ui.destroy()); h.touch('online');
+    let resolve; h.platform.chooseAlbumAvatar = () => new Promise(done => { resolve = done; });
+    const pending = h.ui.chooseOnlineAvatar('album'); h.emit('hide');
+    if (action === 'leave') await h.ui.leaveOnline();
+    else if (action === 'destroy') h.ui.destroy();
+    else {
+      h.emit('show');
+      if (action === 'preset') h.touch('online-preset');
+      else h.ui.cancelOnlineAvatar();
+      if (action === 'replace') {
+        h.platform.chooseAlbumAvatar = async () => ({ avatar: { type: 'image', data: 'data:image/png;base64,bmV3' } });
+        await h.ui.chooseOnlineAvatar('album');
+      }
+    }
+    const expected = copy(h.ui.onlineProfile);
+    resolve({ avatar: { type: 'image', data: 'data:image/png;base64,b2xk' } }); await pending;
+    assert.deepEqual(h.ui.onlineProfile, expected, action); assert.equal(h.ui.profileBusy, false, action);
+  }
+});
+
+test('album hide exception does not relax WeChat avatar callback retirement', async t => {
+  for (const hide of [false, true]) {
+    const h = harness(); t.after(() => h.ui.destroy()); h.touch('online');
+    let tap;
+    h.platform.beginWechatAvatar = async (_style, callback) => { tap = callback; };
+    h.platform.cancelWechatAvatar = () => {};
+    await h.ui.chooseOnlineAvatar('wechat');
+    if (hide) { h.emit('hide'); h.emit('show'); }
+    tap(null, { avatar: { type: 'image', data: 'data:image/png;base64,d2VjaGF0' } });
+    assert.equal(h.ui.onlineProfile.avatar.type, hide ? 'preset' : 'image');
+  }
+});
+
+test('WeChat avatar button permits retry after a failed tap but retires after success or explicit cancel', async t => {
+  const h = harness(); t.after(() => h.ui.destroy()); h.touch('online');
+  let tap; h.platform.beginWechatAvatar = async (_style, callback) => { tap = callback; };
+  h.platform.cancelWechatAvatar = () => {};
+  await h.ui.chooseOnlineAvatar('wechat');
+  tap(new Error('未取得头像'));
+  assert.equal(h.ui.onlineProfile.avatar.type, 'preset'); assert.equal(h.ui.profileBusy, false);
+  const selected = { avatar: { type: 'image', data: 'data:image/png;base64,cmV0cnk=' } };
+  tap(null, selected); assert.deepEqual(h.ui.onlineProfile, selected);
+  tap(null, { avatar: { type: 'image', data: 'data:image/png;base64,b2xk' } });
+  assert.deepEqual(h.ui.onlineProfile, selected, 'successful owner is retired');
+  await h.ui.chooseOnlineAvatar('wechat'); tap(new Error('再次拒绝')); h.ui.cancelOnlineAvatar();
+  tap(null, { avatar: { type: 'image', data: 'data:image/png;base64,bGF0ZQ==' } });
+  assert.deepEqual(h.ui.onlineProfile, selected, 'explicit cancellation still retires a failed owner');
+});
+
+test('cancelled native album picker releases busy and still permits explicit room creation', async t => {
+  const h = harness(); t.after(() => h.ui.destroy()); h.touch('online');
+  let reject, entered = 0, confirmed = 0;
+  h.platform.chooseAlbumAvatar = () => new Promise((_resolve, fail) => { reject = fail; });
+  h.platform.confirmProfile = async () => { confirmed++; return true; };
+  h.ui.online.enter = async () => { entered++; return true; };
+  const pending = h.ui.chooseOnlineAvatar('album'); h.emit('hide'); h.emit('show');
+  reject(new Error('chooseMedia:fail cancel')); await pending;
+  assert.equal(h.ui.profileBusy, false); assert.equal(h.ui.onlineProfile.avatar.type, 'preset');
+  assert.equal(entered, 0); await h.ui.enterOnline(false); assert.equal(confirmed, 1); assert.equal(entered, 1);
+});
+
 test('avatar refusal and late choice preserve playable preset without sending any image', async t => {
   const h = harness(); t.after(() => h.ui.destroy()); h.touch('online');
   h.platform.chooseAlbumAvatar = () => Promise.reject(new Error('privacy denied'));
   await h.ui.chooseOnlineAvatar('album'); assert.equal(h.ui.onlineProfile.avatar.type, 'preset'); assert.match(h.ui.online.error, /privacy denied/);
   let resolve; h.platform.chooseAlbumAvatar = () => new Promise(done => { resolve = done; });
-  const pending = h.ui.chooseOnlineAvatar('album'); h.emit('hide');
+  const pending = h.ui.chooseOnlineAvatar('album'); h.emit('hide'); h.ui.cancelOnlineAvatar();
   resolve({ avatar: { type: 'image', data: 'data:image/png;base64,aGVsbG8=' } }); await pending;
   assert.equal(h.ui.onlineProfile.avatar.type, 'preset');
   h.emit('show'); assert.equal(h.ui.profileBusy, false); assert.equal(h.ui.online.token, '');
