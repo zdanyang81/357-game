@@ -41,7 +41,10 @@ function normalizePayload(data) {
   const room = data.room;
   if (room && typeof room === 'object') {
     if (typeof room.revision === 'string' && /^\d+$/.test(room.revision)) room.revision = Number(room.revision);
-    if (room.status === 'waiting' && room.game == null) room.game = null;
+    if (room.status === 'waiting' && (room.game == null || room.game === '')) room.game = null;
+    // WeChat JSON drops null. A started game then lacks winner and fails validation
+    // after the server has already seated the guest.
+    if (room.game && typeof room.game === 'object' && !Array.isArray(room.game) && !Object.hasOwn(room.game, 'winner')) room.game.winner = null;
     if (Array.isArray(room.players)) room.players.forEach((player, index) => {
       if (player && typeof player.seat === 'string' && Number(player.seat) === index) player.seat = index;
     });

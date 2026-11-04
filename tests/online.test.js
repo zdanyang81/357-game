@@ -83,6 +83,17 @@ test('WeChat string body and omitted null game still open the created room', asy
   assert.equal(h.s.creationUnknown, false);
   h.s.destroy();
 });
+test('WeChat playing response with omitted null winner is accepted after the seat is taken', async () => {
+  const h = setup();
+  const game = engine.createGame({ mode: 'pvp', aiFirst: false, avatars: [0, 3] });
+  delete game.winner;
+  const pending = h.s.enter(code, preset);
+  h.respond({ roomCode: code, token, seat: 1, room: { code, revision: 1, status: 'playing', players: [{ seat: 0, profile: preset }, { seat: 1, profile: preset }], game } }, 200);
+  assert.equal(await pending, true);
+  assert.equal(h.s.seat, 1);
+  assert.equal(h.s.room.game.winner, null);
+  h.s.destroy();
+});
 test('a received but unusable room body does not freeze another attempt', async () => {
   const h = setup();
   const pending = h.s.enter('', preset);
