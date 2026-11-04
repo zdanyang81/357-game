@@ -28,7 +28,7 @@ function png({ width = 1, height = 1, text = false, corrupt = false, pixels, ida
 test('two seats share authoritative rules and last taker loses; snapshots never expose tokens', () => {
   const service = createRoomService({ randomFirst: () => 0, now: () => 10000 });
   const host = service.create(profile(0));
-  assert.match(host.roomCode, /^[A-HJ-NP-Z2-9]{8}$/); assert.match(host.token, /^[a-f0-9]{64}$/);
+  assert.match(host.roomCode, /^[0-9]{4}$/); assert.match(host.token, /^[a-f0-9]{64}$/);
   assert.equal(host.room.status, 'waiting'); assert.equal(host.room.game, null);
   assert.throws(() => service.read(host.roomCode), error('UNAUTHORIZED'));
   const guest = service.join(host.roomCode, profile(3));
@@ -120,7 +120,8 @@ test('actual HTTP two-client lifecycle, token privacy, exact methods and error s
   const { call } = await httpFixture(t, { randomFirst: () => 0 });
   assert.equal((await call('/healthz')).status, 200);
   const a = await call('/v1/rooms', { method: 'POST', data: { profile: png() } });
-  assert.equal(a.status, 201); assert.equal(a.headers.get('cache-control'), 'no-store');
+  assert.equal(a.status, 200); assert.equal(a.headers.get('content-type'), 'application/json');
+  assert.equal(a.headers.get('cache-control'), 'no-store');
   const path = '/v1/rooms/' + a.body.roomCode;
   assert.equal((await call(path)).status, 401);
   const b = await call(path + '/join', { method: 'POST', data: { profile: profile(3) } }); assert.equal(b.status, 200);

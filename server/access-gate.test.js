@@ -22,7 +22,7 @@ test('deployment gate protects create/join/read; cohort capability never replace
     assert.equal(JSON.stringify(failed.data).includes(key), false);
   }
   const host = await request('/v1/rooms', { method: 'POST', access: key, data: { profile: preset } });
-  assert.equal(host.status, 201);
+  assert.equal(host.status, 200);
   const path = '/v1/rooms/' + host.data.roomCode;
   assert.equal((await request(path + '/join', { method: 'POST', data: { profile: preset } })).status, 403);
   assert.equal((await request(path, { access: key })).status, 401);

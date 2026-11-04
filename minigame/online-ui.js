@@ -1,9 +1,9 @@
 'use strict';
-const { OnlineSession, inviteCode, normalizeCode, CODE } = require('./online');
+const { OnlineSession, inviteCode, normalizeCode, codeIssue, CODE, LEGACY_ALPHABET } = require('./online');
 const config = require('./online-config');
 module.exports = {
   initOnline() {
-    this.onlineMode = false; this.onlineCode = ''; this.profileGeneration = 0; this.avatarOperation = null;
+    this.onlineMode = false; this.onlineCode = ''; this.codePad = false; this.codeLegacy = false; this.codePadPage = 0; this.profileGeneration = 0; this.avatarOperation = null;
     this.onlineProfile = { avatar: { type: 'preset', index: 0 } }; this.avatarImages = new Map();
     this.online = new OnlineSession(this.platform, config.apiBase, () => this.onlineChanged(), config.accessKey);
     this.receiveInvite(this.platform.launchQuery ? this.platform.launchQuery() : {});
@@ -17,7 +17,7 @@ module.exports = {
     if (this.online) this.render();
   },
   openOnline() {
-    this.invalidate(); this.modal = null; this.onlineMode = true;
+    this.invalidate(); this.modal = null; this.onlineMode = true; this.codePad = false;
     this.state = null; this.gameId = null; this.screen = 'online'; this.render();
   },
   onlineChanged() {
@@ -38,7 +38,8 @@ module.exports = {
   enterOnline(join) {
     if (this.destroyed || this.hidden || !this.onlineMode || this.screen !== 'online' || this.modal ||
         this.online.busy || this.online.creationUnknown || this.online.room || this.profileBusy) return;
-    if (join && !CODE.test(this.onlineCode)) { this.showOnlineMessage('请先输入有效房间码'); return; }
+    if (join && !CODE.test(this.onlineCode)) { this.showOnlineMessage(codeIssue(this.onlineCode)); return; }
+    this.codePad = false;
     this.cancelOnlineAvatar();
     // Snapshot only the chosen room/profile, not credentials. No request before a second explicit tap.
     this.openModal({ type: 'online-consent', generation: this.profileGeneration, join: !!join,
@@ -68,8 +69,42 @@ module.exports = {
     try {
       const result = await this.platform.inputRoomCode();
       if (!this.onlineMode || this.destroyed || result === null) return;
-      this.onlineCode = normalizeCode(result); this.render();
-    } catch (_) { this.online.error = '房间码输入不可用，请在支持原生输入的微信重试'; this.render(); }
+      this.onlineCode = normalizeCode(result);
+      this.online.error = codeIssue(this.onlineCode);
+      this.render();
+    } catch (_) {
+      this.codePad = true;
+      this.online.error = '系统输入不可用，请用屏幕数字键逐位输入';
+      this.render();
+    }
+  },
+  openCodePad() {
+    if (this.online.room || this.online.busy || this.profileBusy) return;
+    this.cancelOnlineAvatar();
+    this.codePad = true; this.online.error = ''; this.render();
+  },
+  appendRoomCode(char) {
+    const limit = this.codeLegacy ? 8 : 4;
+    const allowed = this.codeLegacy ? LEGACY_ALPHABET : '0123456789';
+    if (this.online.busy || this.onlineCode.length >= limit || !allowed.includes(char)) return;
+    this.onlineCode += char; this.online.error = ''; this.render();
+  },
+  editRoomCode(mode) {
+    if (this.online.busy) return;
+    this.onlineCode = mode === 'clear' ? '' : this.onlineCode.slice(0, -1);
+    this.online.error = ''; this.render();
+  },
+  async copyOnlineCode() {
+    const code = this.online.room && this.online.room.code;
+    try {
+      await this.platform.copyRoomCode(code);
+      if (this.destroyed || !this.onlineMode) return;
+      this.online.error = '房间码已复制。发给另一位已打开本游戏的微信，让对方逐位输入。不是微信号或手机号。';
+    } catch (_) {
+      if (this.destroyed || !this.onlineMode) return;
+      this.online.error = '复制不可用。请按格子逐位核对。数字是画出来的，不会消失。';
+    }
+    this.render();
   },
   async chooseOnlineAvatar(kind) {
     if (this.online.room || this.profileBusy) return;
@@ -113,7 +148,7 @@ module.exports = {
       return;
     }
     if (this.destroyed) return;
-    this.onlineMode = false; this.state = null; this.gameId = null; this.modal = null;
+    this.onlineMode = false; this.codePad = false; this.state = null; this.gameId = null; this.modal = null;
     this.screen = 'home'; this.selected = null; this.invalidate(); this.render();
   },
   onlineAvatar(profile, fallback, x, y, size) {
@@ -138,35 +173,117 @@ module.exports = {
     }
     this.avatar(fallback, x, y, size);
   },
-  drawOnline() {
-    const w = this.width, x = 24, span = w - 48, room = this.online.room;
-    let y = this.top + 20;
-    this.text('好友联网 · 隔离内测', w / 2, y + 12, 19, '#d8b674', 'center', 'bold'); y += 48;
-    this.text('可见时约1.5秒轮询 · 未实测低延迟', w / 2, y, 12, '#9ab4a8', 'center', 'normal', span); y += 30;
-    if (room) {
-      this.text('房间码 ' + room.code, w / 2, y + 24, 24, '#f2ecd9', 'center', 'bold'); y += 72;
-      this.text('等待另一位玩家确认加入', w / 2, y, 15, '#f2ecd9', 'center'); y += 32;
-      this.button('online-invite', '邀请微信好友', x, y, span, 44, () => {
-        try { this.platform.inviteRoom(room.code); } catch (_) { this.online.error = '邀请暂不可用，可手输房间码加入'; this.render(); }
-      }); y += 54;
-      this.button('online-refresh', '刷新房间', x, y, span, 44, () => this.online.refresh(), { disabled: this.online.busy }); y += 56;
+  // Drawn segments, not font glyphs. WeChat canvas fonts can omit digits while letters remain.
+  drawDigit(digit, x, y, w, h) {
+    const c = this.ctx, on = '#f2ecd9', t = Math.max(4, Math.min(w, h) * 0.16);
+    const seg = (sx, sy, sw, sh) => { c.fillStyle = on; c.fillRect(sx, sy, sw, sh); };
+    const mask = [0x3f, 0x06, 0x5b, 0x4f, 0x66, 0x6d, 0x7d, 0x07, 0x7f, 0x6f][digit] || 0;
+    const x1 = x + 2, x2 = x + w - t - 2, y1 = y + 2, y2 = y + h / 2 - t / 2, y3 = y + h - t - 2;
+    const horiz = yb => seg(x1 + t, yb, Math.max(1, w - t * 2 - 4), t);
+    const vert = (xb, yb) => seg(xb, yb, t, Math.max(1, h / 2 - t - 4));
+    if (mask & 0x01) horiz(y1);
+    if (mask & 0x02) vert(x2, y1 + t);
+    if (mask & 0x04) vert(x2, y2 + t);
+    if (mask & 0x08) horiz(y3);
+    if (mask & 0x10) vert(x1, y2 + t);
+    if (mask & 0x20) vert(x1, y1 + t);
+    if (mask & 0x40) horiz(y2);
+  },
+  drawCodeSlots(code, x, y, span, h, slots) {
+    const count = slots || Math.max(code.length, 4), gap = count > 4 ? 3 : 8;
+    const cell = (span - gap * (count - 1)) / count;
+    for (let i = 0; i < count; i++) {
+      const cx = x + i * (cell + gap);
+      this.panel(cx, y, cell, h, '#183a2d', i < code.length ? '#d8b674' : '#385743', 6);
+      const ch = code[i] || '';
+      if (/^[0-9]$/.test(ch)) this.drawDigit(Number(ch), cx + 3, y + 3, Math.max(8, cell - 6), Math.max(8, h - 6));
+      else if (ch) this.text(ch, cx + cell / 2, y + h / 2, Math.min(16, cell * 0.5), '#f2ecd9', 'center', 'bold');
+    }
+  },
+  drawCodePad() {
+    const w = this.width, x = 24, span = w - 48, gap = 6, half = (span - 8) / 2;
+    let y = this.top + 6;
+    this.text(this.codeLegacy ? '输入8位旧房间码' : '输入4位房间码', w / 2, y + 8, 16, '#d8b674', 'center', 'bold'); y += 24;
+    this.drawCodeSlots(this.onlineCode, x, y, span, this.codeLegacy ? 40 : 52, this.codeLegacy ? 8 : 4); y += this.codeLegacy ? 46 : 58;
+    const limit = this.codeLegacy ? 8 : 4;
+    if (this.codeLegacy) {
+      const cols = 4, keyH = 44, keyW = (span - gap * (cols - 1)) / cols;
+      const keys = [...LEGACY_ALPHABET].slice(this.codePadPage ? 16 : 0, this.codePadPage ? 32 : 16);
+      keys.forEach((ch, i) => {
+        const col = i % cols, row = Math.floor(i / cols);
+        this.button('code-key-' + ch, /^[0-9]$/.test(ch) ? '' : ch, x + col * (keyW + gap), y + row * (keyH + gap), keyW, keyH,
+          () => this.appendRoomCode(ch), { disabled: this.online.busy || this.onlineCode.length >= limit, size: 16 });
+        if (/^[0-9]$/.test(ch)) {
+          const box = this.hitBoxes[this.hitBoxes.length - 1];
+          this.drawDigit(Number(ch), box.x + 12, box.y + 6, box.w - 24, box.h - 12);
+        }
+      });
+      y += 4 * keyH + 3 * gap + 6;
     } else {
-      this.onlineAvatar(this.onlineProfile, 0, w / 2 - 22, y, 44); y += 54;
+      const cols = 5, keyH = 44, keyW = (span - gap * (cols - 1)) / cols;
+      '0123456789'.split('').forEach((ch, i) => {
+        const col = i % cols, row = Math.floor(i / cols);
+        this.button('code-key-' + ch, '', x + col * (keyW + gap), y + row * (keyH + gap), keyW, keyH,
+          () => this.appendRoomCode(ch), { disabled: this.online.busy || this.onlineCode.length >= limit });
+        const box = this.hitBoxes[this.hitBoxes.length - 1];
+        this.drawDigit(Number(ch), box.x + 10, box.y + 6, box.w - 20, box.h - 12);
+      });
+      y += 2 * keyH + gap + 6;
+    }
+    const third = (span - gap * 2) / 3;
+    this.button('code-delete', '退格', x, y, third, 44, () => this.editRoomCode('delete'), { disabled: !this.onlineCode, size: 14 });
+    this.button('code-clear', '清空', x + third + gap, y, third, 44, () => this.editRoomCode('clear'), { disabled: !this.onlineCode, size: 14 });
+    this.button(this.codeLegacy ? 'code-page' : 'code-system', this.codeLegacy ? (this.codePadPage ? '前半' : '后半') : '键盘',
+      x + (third + gap) * 2, y, third, 44, () => {
+        if (this.codeLegacy) { this.codePadPage = this.codePadPage ? 0 : 1; this.render(); }
+        else this.inputOnlineCode();
+      }, { disabled: !this.codeLegacy && this.online.busy, size: 14 });
+    y += 50;
+    const ready = CODE.test(this.onlineCode) && this.online.enabled && !this.online.busy && !this.online.creationUnknown && !this.profileBusy;
+    this.button('online-join', '确认加入', x, y, span, 44, () => this.enterOnline(true), { disabled: !ready, primary: true }); y += 50;
+    this.button('code-pad-back', '返回', x, y, half, 44, () => { this.codePad = false; this.render(); });
+    this.button('code-mode', this.codeLegacy ? '改输4位' : '8位旧码', x + half + 8, y, half, 44, () => {
+      this.codeLegacy = !this.codeLegacy; this.codePadPage = 0; this.onlineCode = ''; this.online.error = ''; this.render();
+    }, { size: 14 });
+    y += 48;
+    const message = this.online.error || codeIssue(this.onlineCode) ||
+      (this.codeLegacy ? '旧码8位，不含I/O和0/1。不是微信号。' : '新房间是4位数字。不是手机号，也不是微信号。');
+    this.wrap(message, span, 12).slice(0, Math.max(1, Math.floor((this.bottom - y) / 18))).forEach((line, i) =>
+      this.text(line, x, y + i * 18, 12, '#d8b674'));
+  },
+  drawOnline() {
+    if (!this.online.room && this.codePad) { this.drawCodePad(); return; }
+    const w = this.width, x = 24, span = w - 48, room = this.online.room, half = (span - 8) / 2;
+    let y = this.top + 12;
+    this.text('好友联网', w / 2, y + 10, 19, '#d8b674', 'center', 'bold'); y += 32;
+    if (room) {
+      const slots = room.code.length, slotH = slots > 4 ? 46 : 64;
+      this.drawCodeSlots(room.code, x, y, span, slotH, slots); y += slotH + 8;
+      this.text(slots > 4 ? '对方点「8位旧码」逐位输入' : '对方输入这4位数字', w / 2, y, 13, '#f2ecd9', 'center', 'normal', span); y += 22;
+      this.button('online-invite', '邀请微信好友', x, y, span, 44, () => {
+        try { this.platform.inviteRoom(room.code); } catch (_) { this.online.error = '微信分享发不出去。请复制房间码，让对方逐位输入。'; this.render(); }
+      }); y += 52;
+      this.button('online-copy', '复制房间码', x, y, half, 44, () => this.copyOnlineCode(), { disabled: this.online.busy });
+      this.button('online-refresh', '刷新房间', x + half + 8, y, half, 44, () => this.online.refresh(), { disabled: this.online.busy }); y += 52;
+    } else {
+      this.onlineAvatar(this.onlineProfile, 0, w / 2 - 22, y, 44); y += 50;
       this.button('online-preset', '内置形象（可直接玩）', x, y, span, 44, () => {
         this.cancelOnlineAvatar(); const a = this.onlineProfile.avatar;
         this.onlineProfile = { avatar: { type: 'preset', index: a.type === 'preset' ? (a.index + 1) % 6 : 0 } }; this.render();
       }, { disabled: this.online.busy }); y += 46;
-      const half = (span - 8) / 2;
       this.button('online-album', '自选相册图片', x, y, half, 44, () => this.chooseOnlineAvatar('album'), { disabled: this.profileBusy || this.online.busy });
       this.button('online-wechat', '自愿微信头像', x + half + 8, y, half, 44, () => this.chooseOnlineAvatar('wechat'), { disabled: this.profileBusy || this.online.busy }); y += 46;
-      this.button('online-avatar-cancel', '取消授权入口 / 继续用当前形象', x, y, span, 44, () => { this.cancelOnlineAvatar(); this.render(); }); y += 48;
-      this.button('online-code', '加入房间码：' + (this.onlineCode || '仅加入时填写'), x, y, span, 44, () => this.inputOnlineCode(), { disabled: this.online.busy }); y += 46;
+      this.button('online-avatar-cancel', '取消授权入口 / 继续用当前形象', x, y, span, 44, () => { this.cancelOnlineAvatar(); this.render(); }); y += 46;
+      this.button('online-code', '输入4位房间码', x, y, span, 44, () => this.openCodePad(), { disabled: this.online.busy }); y += 46;
       const disabled = this.online.busy || this.profileBusy || this.online.creationUnknown || !this.online.enabled;
-      this.button('online-create', '随机创建房间', x, y, half, 44, () => this.enterOnline(false), { disabled, primary: true });
-      this.button('online-join', '确认加入', x + half + 8, y, half, 44, () => this.enterOnline(true), { disabled: disabled || !CODE.test(this.onlineCode) }); y += 52;
+      this.button('online-create', '随机创建房间', x, y, span, 44, () => this.enterOnline(false), { disabled, primary: true }); y += 52;
     }
-    this.button('online-back', room ? '离开并关闭房间' : '返回离线玩法', x, y, span, 44, () => this.leaveOnline(), { disabled: this.online.busy }); y += 52;
-    const message = this.online.error || (!this.online.enabled ? '联网未开放：尚未配置HTTPS服务' : '创建自动生成随机码；加入才需填写房间码');
+    this.button('online-back', room ? '离开并关闭房间' : '返回离线玩法', x, y, span, 44, () => this.leaveOnline(), { disabled: this.online.busy }); y += 48;
+    const issue = this.onlineCode && !CODE.test(this.onlineCode) ? codeIssue(this.onlineCode) : '';
+    const message = issue || this.online.error || (!this.online.enabled ? '联网未开放：尚未配置HTTPS服务' :
+      room ? (room.code.length > 4 ? '分享发不出去时，复制这8位。数字是画出来的。不是微信号或手机号。' :
+        '这是4位房间码，不是微信号或手机号。分享发不出去时，复制数字让对方逐位输入。') :
+      '两个微信都打开本游戏。创建后把房间码发给对方。不能用微信号或手机号查找。');
     this.wrap(message, span, 12).slice(0, Math.max(1, Math.floor((this.bottom - y) / 18))).forEach((line, i) =>
       this.text(line, x, y + i * 18, 12, '#d8b674'));
   }

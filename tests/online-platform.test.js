@@ -13,9 +13,10 @@ function fixture() {
     createImage() { const image = { width: 800, height: 600 }; Object.defineProperty(image, 'src', { set(value) { calls.push(['source', value]); queueMicrotask(() => image.onload()); } }); return image; },
     requirePrivacyAuthorize(options) { calls.push(['privacy']); options.success({}); },
     chooseMedia(options) { calls.push(['choose', options]); options.success({ tempFiles: [{ tempFilePath: '/temp/large-original.jpeg' }] }); },
-    showModal(options) { calls.push(['modal', options]); options.success({ confirm: true, content: 'ABCDEFG2' }); },
+    showModal(options) { calls.push(['modal', options]); options.success({ confirm: true, content: '2468' }); },
+    setClipboardData(options) { calls.push(['copy', options]); options.success({}); },
     shareAppMessage(options) { calls.push(['share', options]); },
-    getLaunchOptionsSync() { return { query: { room: 'ABCDEFG2', token: 'evil' } }; },
+    getLaunchOptionsSync() { return { query: { room: '2468', token: 'evil' } }; },
     createUserInfoButton(options) { calls.push(['user-button', options]); button = { onTap(fn) { handlers.tap = fn; }, destroy() { calls.push(['button-destroy']); } }; return button; }
   };
   return { wx, calls, handlers, p: createPlatform(wx) };
@@ -49,23 +50,25 @@ test('denied user tap is handled without inventing avatar success', async () => 
   await h.p.beginWechatAvatar({}, e => { error = e; }); h.handlers.tap({ errMsg: 'deny' });
   assert.match(error.message, /未取得头像/); assert.equal(h.calls.filter(c => c[0] === 'source').length, 0); h.p.destroy();
 });
-test('cold/hot query forwarded and invitation contains room only, never token', () => {
-  const h = fixture(); assert.equal(h.p.launchQuery().room, 'ABCDEFG2'); let shown;
-  h.p.onShow(options => { shown = options.query; }); h.handlers.show({ query: { room: 'BCDEFGH2' } });
-  assert.equal(shown.room, 'BCDEFGH2'); h.p.inviteRoom('ABCDEFG2');
-  assert.deepEqual(h.calls.find(c => c[0] === 'share')[1], { title: '邀请你来357对战', query: 'room=ABCDEFG2', toCurrentGroup: false });
-  h.p.inviteRoom('ABCDEF89');
-  assert.equal(h.calls.filter(c => c[0] === 'share').at(-1)[1].query, 'room=ABCDEF89');
-  for (const invalid of ['invalid', 'ABCDEFIO', 'ABCDEF01']) assert.throws(() => h.p.inviteRoom(invalid)); h.p.destroy();
+test('cold/hot query forwarded and invitation contains room only, never token', async () => {
+  const h = fixture(); assert.equal(h.p.launchQuery().room, '2468'); let shown;
+  h.p.onShow(options => { shown = options.query; }); h.handlers.show({ query: { room: '1357' } });
+  assert.equal(shown.room, '1357'); h.p.inviteRoom('2468');
+  assert.deepEqual(h.calls.find(c => c[0] === 'share')[1], { title: '邀请你来357对战', query: 'room=2468', toCurrentGroup: false });
+  h.p.inviteRoom('8024');
+  assert.equal(h.calls.filter(c => c[0] === 'share').at(-1)[1].query, 'room=8024');
+  await h.p.copyRoomCode('0246');
+  assert.equal(h.calls.find(c => c[0] === 'copy')[1].data, '0246');
+  for (const invalid of ['invalid', '12ab', '12345', 'ABCDEF01']) assert.throws(() => h.p.inviteRoom(invalid)); h.p.destroy();
 });
 test('room invitations opt out of current-group forwarding so the user can select another conversation', () => {
   const h = fixture();
   try {
-    h.p.inviteRoom('ABCDEFG2');
+    h.p.inviteRoom('2468');
     const options = h.calls.find(c => c[0] === 'share')[1];
     // WeChat defaults to the current group when opened from its group toolbar.
     assert.equal(options.toCurrentGroup, false);
-    assert.equal(options.query, 'room=ABCDEFG2');
+    assert.equal(options.query, 'room=2468');
     assert.equal(h.calls.length, 1, 'inviting must not access contacts, login, avatars or phone data');
   } finally { h.p.destroy(); }
 });
