@@ -120,7 +120,8 @@ function createPlatform(wx) {
     launchQuery() { try { return wx.getLaunchOptionsSync().query || {}; } catch (_) { return {}; } },
     inviteRoom(code) {
       if (!CODE.test(code)) throw new Error('房间码无效');
-      return wx.shareAppMessage({ title: '邀请你来357对战', query: 'room=' + encodeURIComponent(code) });
+      // Keep conversation selection available when launched from a group toolbar.
+      return wx.shareAppMessage({ title: '邀请你来357对战', query: 'room=' + encodeURIComponent(code), toCurrentGroup: false });
     },
     async inputRoomCode() {
       const result = await call('showModal', { title: '加入357房间', editable: true,
