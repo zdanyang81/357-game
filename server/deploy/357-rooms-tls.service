@@ -1,0 +1,45 @@
+[Unit]
+Description=357 independent internal-test HTTPS ingress
+After=network.target 357-rooms.service
+Requires=357-rooms.service
+StartLimitIntervalSec=60
+StartLimitBurst=3
+
+[Service]
+Type=simple
+# Root reads the existing infrastructure TLS key only at startup. The audited
+# entrypoint drops all supplementary groups and switches to uid/gid 65534 BEFORE listening.
+User=root
+Group=root
+WorkingDirectory=/opt/357-rooms/current
+Environment=TLS_CERT=/etc/letsencrypt/live/spiet.cn/fullchain.pem
+Environment=TLS_KEY=/etc/letsencrypt/live/spiet.cn/privkey.pem
+Environment=TLS_EDGE_PORT=18086
+Environment=ROOMS_PORT=18795
+ExecStart=/usr/bin/node --max-old-space-size=48 /opt/357-rooms/current/server/tls-edge.js
+Restart=on-failure
+RestartSec=3
+TimeoutStopSec=5
+UMask=0077
+NoNewPrivileges=yes
+CapabilityBoundingSet=CAP_SETUID CAP_SETGID
+AmbientCapabilities=
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectSystem=strict
+ProtectHome=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+RestrictNamespaces=yes
+LockPersonality=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+InaccessiblePaths=-/data -/root -/home -/run/dsh-web-bootstrap
+MemoryMax=128M
+CPUQuota=25%
+TasksMax=32
+LimitNOFILE=256
+
+[Install]
+WantedBy=multi-user.target

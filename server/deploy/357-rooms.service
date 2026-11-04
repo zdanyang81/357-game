@@ -1,0 +1,40 @@
+[Unit]
+Description=357 isolated internal-test room authority
+After=network.target
+StartLimitIntervalSec=60
+StartLimitBurst=3
+
+[Service]
+Type=simple
+DynamicUser=yes
+User=dsh357rooms
+Group=dsh357rooms
+WorkingDirectory=/opt/357-rooms/current
+EnvironmentFile=/etc/357-rooms/rooms.env
+ExecStart=/usr/bin/node --max-old-space-size=64 /opt/357-rooms/current/server/http.js
+Restart=on-failure
+RestartSec=3
+TimeoutStopSec=5
+UMask=0077
+NoNewPrivileges=yes
+CapabilityBoundingSet=
+AmbientCapabilities=
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectSystem=strict
+ProtectHome=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+RestrictNamespaces=yes
+LockPersonality=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+InaccessiblePaths=-/data -/root -/home -/run/dsh-web-bootstrap
+MemoryMax=128M
+CPUQuota=25%
+TasksMax=32
+LimitNOFILE=256
+
+[Install]
+WantedBy=multi-user.target
