@@ -691,6 +691,38 @@ test('failed leave is visible above the confirmation modal and keeps a read-only
     'reopening leave confirmation must not hide the recovery error');
 });
 
+for (const unknown of [false, true]) test('real terminal online leave retires result modal: ' + (unknown ? 'unknown then GET410' : 'confirmed'), async t => {
+  const h = harness(); t.after(() => h.ui.destroy()); h.touch('online');
+  let game = engine.createGame({ mode: 'pvp' });
+  while (game.winner === null) game = engine.move(game, game.piles.findIndex(n => n > 0), 1);
+  const room = { code: 'ABCDEFG2', revision: game.history.length, status: 'finished', game,
+    players: [0, 1].map(seat => ({ seat, profile: { avatar: { type: 'preset', index: 0 } } })) };
+  const requests = [];
+  h.ui.online.enabled = true; h.ui.online.base = 'https://rooms.example.test';
+  h.platform.request = async options => {
+    requests.push(options);
+    if (options.url.endsWith('/join')) return { statusCode: 200, data: { roomCode: room.code, room, seat: 0, token: 'test-token-000000000000' } };
+    if (options.method === 'GET') return { statusCode: 410, data: { error: { message: 'closed' } } };
+    if (unknown) throw new Error('lost leave response');
+    return { statusCode: 200, data: {} };
+  };
+  assert.equal(await h.ui.online.enter(room.code, h.ui.onlineProfile), true);
+  assert.equal(h.ui.modal.type, 'online-result');
+  if (unknown) {
+    await h.ui.leaveOnline(); assert.equal(h.ui.online.uncertain, true);
+    assert.equal(h.ui.modal.type, 'online-message'); h.ui.closeModal();
+    assert.equal(h.ui.modal.type, 'online-result');
+    await h.ui.online.refresh(); assert.equal(h.ui.online.expired, true);
+  }
+  await assert.doesNotReject(h.ui.leaveOnline());
+  assert.equal(h.ui.screen, 'home'); assert.equal(h.ui.onlineMode, false);
+  assert.equal(h.ui.state, null); assert.equal(h.ui.modal, null); assert.equal(h.ui.online.room, null);
+  assert.equal(h.ui.online.token, ''); assert.equal(h.timers.size, 0);
+  assert.equal(requests.filter(r => r.url.endsWith('/leave')).length, 1);
+  assert.equal(requests.filter(r => r.url.endsWith('/moves')).length, 0);
+  assert.doesNotThrow(() => h.ui.render());
+});
+
 test('Canvas consent does not wait for a native confirmation promise that never calls back', async t => {
   const h = harness({ safeTop: 84 }); t.after(() => h.ui.destroy()); h.touch('online');
   let nativeCalls = 0, entered = 0;

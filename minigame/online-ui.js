@@ -28,7 +28,11 @@ module.exports = {
       this.state = room.game; this.screen = 'game';
       if (changed) this.selected = null;
       if (room.status === 'finished' && !this.modal) this.modal = { type: 'online-result' };
-    } else { this.state = null; this.screen = 'online'; }
+    } else {
+      // Retire the result view before its authoritative game state disappears.
+      if (this.modal && this.modal.type === 'online-result') this.modal = null;
+      this.state = null; this.screen = 'online';
+    }
     this.render();
   },
   enterOnline(join) {
