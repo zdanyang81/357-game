@@ -53,10 +53,21 @@ test('cold/hot query forwarded and invitation contains room only, never token', 
   const h = fixture(); assert.equal(h.p.launchQuery().room, 'ABCDEFG2'); let shown;
   h.p.onShow(options => { shown = options.query; }); h.handlers.show({ query: { room: 'BCDEFGH2' } });
   assert.equal(shown.room, 'BCDEFGH2'); h.p.inviteRoom('ABCDEFG2');
-  assert.deepEqual(h.calls.find(c => c[0] === 'share')[1], { title: '邀请你来357对战', query: 'room=ABCDEFG2' });
+  assert.deepEqual(h.calls.find(c => c[0] === 'share')[1], { title: '邀请你来357对战', query: 'room=ABCDEFG2', toCurrentGroup: false });
   h.p.inviteRoom('ABCDEF89');
   assert.equal(h.calls.filter(c => c[0] === 'share').at(-1)[1].query, 'room=ABCDEF89');
   for (const invalid of ['invalid', 'ABCDEFIO', 'ABCDEF01']) assert.throws(() => h.p.inviteRoom(invalid)); h.p.destroy();
+});
+test('room invitations opt out of current-group forwarding so the user can select another conversation', () => {
+  const h = fixture();
+  try {
+    h.p.inviteRoom('ABCDEFG2');
+    const options = h.calls.find(c => c[0] === 'share')[1];
+    // WeChat defaults to the current group when opened from its group toolbar.
+    assert.equal(options.toCurrentGroup, false);
+    assert.equal(options.query, 'room=ABCDEFG2');
+    assert.equal(h.calls.length, 1, 'inviting must not access contacts, login, avatars or phone data');
+  } finally { h.p.destroy(); }
 });
 test('legacy album fallback remains image-only; unavailable privacy cannot be bypassed', async () => {
   const h = fixture(); delete h.wx.chooseMedia;
