@@ -25,8 +25,33 @@ function validRoom(room) {
   return !!room && CODE.test(room.code) && Number.isSafeInteger(room.revision) && room.revision >= 0 &&
     ['waiting', 'playing', 'finished'].includes(room.status) && Array.isArray(room.players) &&
     room.players.length >= 1 && room.players.length <= 2 && room.players.every((p, i) => p.seat === i && p.profile) &&
-    (room.status === 'waiting' ? room.game === null : engine.validateState(room.game) && room.game.mode === 'pvp' &&
+    (room.status === 'waiting' ? room.game == null : engine.validateState(room.game) && room.game.mode === 'pvp' &&
       (room.status === 'finished') === (room.game.winner !== null));
+}
+function decodeBody(data) {
+  if (typeof data !== 'string') return data;
+  const text = data.trim();
+  if (!text.startsWith('{')) return data;
+  try { return JSON.parse(text); } catch (_) { return data; }
+}
+function normalizePayload(data) {
+  data = decodeBody(data);
+  if (!data || typeof data !== 'object') return data;
+  if (typeof data.seat === 'string' && /^[01]$/.test(data.seat)) data.seat = Number(data.seat);
+  const room = data.room;
+  if (room && typeof room === 'object') {
+    if (typeof room.revision === 'string' && /^\d+$/.test(room.revision)) room.revision = Number(room.revision);
+    if (room.status === 'waiting' && room.game == null) room.game = null;
+    if (Array.isArray(room.players)) room.players.forEach((player, index) => {
+      if (player && typeof player.seat === 'string' && Number(player.seat) === index) player.seat = index;
+    });
+  }
+  return data;
+}
+function formatError() {
+  const error = new Error('房间响应格式错误');
+  error.definite = true;
+  return error;
 }
 class OnlineSession {
   constructor(platform, base, changed, accessKey) {
@@ -51,17 +76,18 @@ class OnlineSession {
     const header = auth ? { Authorization: 'Bearer ' + this.token } : {};
     if (data !== undefined) header['Content-Type'] = 'application/json';
     if (this.accessKey) header['X-357-Access-Key'] = this.accessKey;
-    return this.p.request({ url: this.base + path, method, data, header, timeout: 8000 }).then(res => {
+    return this.p.request({ url: this.base + path, method, data, header, timeout: 8000, dataType: 'json' }).then(res => {
+      const body = normalizePayload(res && res.data);
       if (!res || res.statusCode < 200 || res.statusCode >= 300) {
-        const detail = res && res.data && res.data.error;
+        const detail = body && body.error;
         const error = new Error(detail && detail.message || '服务暂不可用');
         error.code = detail && detail.code; error.statusCode = res && res.statusCode; error.definite = !!res && res.statusCode >= 400 && res.statusCode < 500; throw error;
       }
-      return res.data;
+      return body;
     });
   }
   accept(room) {
-    if (!validRoom(room) || (this.room && room.code !== this.room.code)) throw new Error('房间响应格式错误');
+    if (!validRoom(room) || (this.room && room.code !== this.room.code)) throw formatError();
     if (this.room && room.revision < this.room.revision) return;
     this.room = room;
   }
@@ -73,8 +99,8 @@ class OnlineSession {
     try {
       const data = await this.request('POST', code ? '/v1/rooms/' + normalized + '/join' : '/v1/rooms', { profile }, false);
       if (epoch !== this.epoch || this.destroyed) return false;
-      if (!validRoom(data.room) || data.roomCode !== data.room.code || ![0, 1].includes(data.seat) ||
-          typeof data.token !== 'string' || data.token.length < 16) throw new Error('房间响应格式错误');
+      if (!data || !validRoom(data.room) || data.roomCode !== data.room.code || ![0, 1].includes(data.seat) ||
+          typeof data.token !== 'string' || data.token.length < 16) throw formatError();
       this.accept(data.room); this.token = data.token; this.seat = data.seat; this.uncertain = false; this.expired = false;
       return true;
     } catch (error) {

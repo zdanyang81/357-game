@@ -72,6 +72,26 @@ test('real room service responses with 8/9 flow through two OnlineSessions end t
   assert.ok(calls.every(call => credentials.every(secret => !call.url.includes(secret))));
 });
 
+test('WeChat string body and omitted null game still open the created room', async () => {
+  const h = setup();
+  const payload = JSON.stringify({ roomCode: code, token, seat: '0', room: { code, revision: '0', status: 'waiting', players: [{ seat: '0', profile: preset }] } });
+  const pending = h.s.enter('', preset);
+  h.respond(payload, 201);
+  assert.equal(await pending, true);
+  assert.equal(h.s.seat, 0);
+  assert.equal(h.s.room.game, null);
+  assert.equal(h.s.creationUnknown, false);
+  h.s.destroy();
+});
+test('a received but unusable room body does not freeze another attempt', async () => {
+  const h = setup();
+  const pending = h.s.enter('', preset);
+  h.respond({ roomCode: code, token, seat: 0, room: { code, revision: 0, status: 'waiting', players: [] } }, 200);
+  assert.equal(await pending, false);
+  assert.equal(h.s.creationUnknown, false);
+  assert.match(h.s.error, /格式错误/);
+  h.s.destroy();
+});
 test('invitations validate only room code; never accept external endpoint/token', () => {
   assert.equal(inviteCode({ room: ' abcdefg2 ', apiBase: 'https://evil', token }), code);
   for (const value of ['12345678', 'ABCD/EFG', '', null, 123]) assert.equal(inviteCode({ room: value }), '');

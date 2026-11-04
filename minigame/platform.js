@@ -113,7 +113,8 @@ function createPlatform(wx) {
     request(options) {
       return new Promise((resolve, reject) => {
         if (typeof wx.request !== 'function') { reject(new Error('网络能力不可用')); return; }
-        try { wx.request({ ...options, success: resolve, fail: e => reject(new Error(e && e.errMsg || '网络中断')) }); }
+        // dataType json asks WeChat to parse. Some phones still return a string for 201 or charset JSON.
+        try { wx.request({ dataType: 'json', ...options, success: resolve, fail: e => reject(new Error(e && e.errMsg || '网络中断')) }); }
         catch (error) { reject(error); }
       });
     },
