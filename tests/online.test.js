@@ -2,7 +2,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const engine = require('../minigame/core/engine');
-const { OnlineSession, inviteCode, CODE } = require('../minigame/online');
+const { OnlineSession, inviteCode, normalizeCode, codeIssue, CODE, ALPHABET } = require('../minigame/online');
 const { createRoomService, CODE: SERVER_CODE } = require('../server/rooms');
 const code = 'ABCDEFG2', token = 'test-token-000000000000000000';
 const preset = { avatar: { type: 'preset', index: 0 } };
@@ -25,6 +25,14 @@ test('all code validators match server alphabet including 8/9 and excluding I/O/
     assert.equal(inviteCode({ room: value }), SERVER_CODE.test(value) ? value : '', value);
   }
   assert.equal(inviteCode({ room: ' abcdef89 ' }), 'ABCDEF89');
+  assert.equal(normalizeCode(' 房间码：ａｂｃｄｅｆｇ２ '), 'ABCDEFG2');
+  assert.equal(inviteCode({ room: '房间码 ABCDEFG2' }), 'ABCDEFG2');
+  assert.equal(normalizeCode('ABCDEFG0'), 'ABCDEFG0');
+  assert.match(codeIssue('ABCDEFG0'), /0\/1/);
+  assert.match(codeIssue('ABC'), /3位/);
+  assert.equal(codeIssue('ABCDEFG2'), '');
+  assert.equal(ALPHABET.length, 32);
+  assert.equal(/[IO01]/.test(ALPHABET), false);
 });
 
 test('real room service responses with 8/9 flow through two OnlineSessions end to end', async t => {
@@ -64,6 +72,37 @@ test('real room service responses with 8/9 flow through two OnlineSessions end t
   assert.ok(calls.every(call => credentials.every(secret => !call.url.includes(secret))));
 });
 
+test('WeChat string body and omitted null game still open the created room', async () => {
+  const h = setup();
+  const payload = JSON.stringify({ roomCode: code, token, seat: '0', room: { code, revision: '0', status: 'waiting', players: [{ seat: '0', profile: preset }] } });
+  const pending = h.s.enter('', preset);
+  h.respond(payload, 201);
+  assert.equal(await pending, true);
+  assert.equal(h.s.seat, 0);
+  assert.equal(h.s.room.game, null);
+  assert.equal(h.s.creationUnknown, false);
+  h.s.destroy();
+});
+test('WeChat playing response with omitted null winner is accepted after the seat is taken', async () => {
+  const h = setup();
+  const game = engine.createGame({ mode: 'pvp', aiFirst: false, avatars: [0, 3] });
+  delete game.winner;
+  const pending = h.s.enter(code, preset);
+  h.respond({ roomCode: code, token, seat: 1, room: { code, revision: 1, status: 'playing', players: [{ seat: 0, profile: preset }, { seat: 1, profile: preset }], game } }, 200);
+  assert.equal(await pending, true);
+  assert.equal(h.s.seat, 1);
+  assert.equal(h.s.room.game.winner, null);
+  h.s.destroy();
+});
+test('a received but unusable room body does not freeze another attempt', async () => {
+  const h = setup();
+  const pending = h.s.enter('', preset);
+  h.respond({ roomCode: code, token, seat: 0, room: { code, revision: 0, status: 'waiting', players: [] } }, 200);
+  assert.equal(await pending, false);
+  assert.equal(h.s.creationUnknown, false);
+  assert.match(h.s.error, /格式错误（200 object players）/);
+  h.s.destroy();
+});
 test('invitations validate only room code; never accept external endpoint/token', () => {
   assert.equal(inviteCode({ room: ' abcdefg2 ', apiBase: 'https://evil', token }), code);
   for (const value of ['12345678', 'ABCD/EFG', '', null, 123]) assert.equal(inviteCode({ room: value }), '');

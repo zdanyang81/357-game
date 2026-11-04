@@ -113,7 +113,8 @@ function createPlatform(wx) {
     request(options) {
       return new Promise((resolve, reject) => {
         if (typeof wx.request !== 'function') { reject(new Error('网络能力不可用')); return; }
-        try { wx.request({ ...options, success: resolve, fail: e => reject(new Error(e && e.errMsg || '网络中断')) }); }
+        // dataType json asks WeChat to parse. Some phones still return a string for 201 or charset JSON.
+        try { wx.request({ dataType: 'json', ...options, success: resolve, fail: e => reject(new Error(e && e.errMsg || '网络中断')) }); }
         catch (error) { reject(error); }
       });
     },
@@ -127,6 +128,11 @@ function createPlatform(wx) {
       const result = await call('showModal', { title: '加入357房间', editable: true,
         placeholderText: '8位房间码', confirmText: '预填', cancelText: '取消' });
       return result.confirm ? result.content : null;
+    },
+    async copyRoomCode(code) {
+      if (!CODE.test(code)) throw new Error('房间码无效');
+      // Copy only the invitation code. Never copy a token, endpoint, or share query.
+      await call('setClipboardData', { data: code });
     },
     async confirmProfile() {
       const result = await call('showModal', { title: '确认进入内测房间',

@@ -671,6 +671,50 @@ test('online lobby is bounded on narrow screen; invites only prefill and never a
   assert.equal(h.ui.hitBoxes.find(b => b.id === 'online-join').disabled, false);
   h.ui.onlineCode = 'ABCDEFIO'; h.ui.render();
   assert.equal(h.ui.hitBoxes.find(b => b.id === 'online-join').disabled, true);
+  const drawn = h.calls.filter(call => call.method === 'fillText').map(call => String(call.args[0])).join('');
+  assert.match(drawn, /I\/O/);
+});
+test('two WeChat room-code entry uses an on-screen alphabet and does not request before confirm', t => {
+  const h = harness({ width: 320, height: 568, safeTop: 84, safeBottom: 34 }); t.after(() => h.ui.destroy());
+  let requests = 0; h.platform.request = () => { requests++; throw new Error('unexpected'); };
+  h.platform.inputRoomCode = async () => { throw new Error('modal unavailable'); };
+  h.touch('online'); h.touch('online-code');
+  assert.equal(requests, 0); assert.equal(h.ui.codePad, true); withinSafeArea(h, 'room code pad');
+  const keys = h.ui.hitBoxes.filter(b => b.id.startsWith('code-key-')).map(b => b.id.slice(9));
+  assert.equal(keys.length, 16); assert.equal(keys.some(ch => 'IO01'.includes(ch)), false);
+  for (const ch of ['A', 'B', 'C', 'D', 'E', 'F', 'G']) h.touch('code-key-' + ch);
+  h.touch('code-page');
+  assert.equal(h.ui.hitBoxes.filter(b => b.id.startsWith('code-key-')).some(b => 'IO01'.includes(b.id.slice(9))), false);
+  h.touch('code-key-2');
+  assert.equal(h.ui.onlineCode, 'ABCDEFG2'); assert.equal(requests, 0);
+  h.touch('code-delete'); assert.equal(h.ui.onlineCode, 'ABCDEFG');
+  h.touch('code-key-2');
+  h.ui.online.enabled = true; h.ui.render();
+  h.touch('online-join');
+  assert.equal(requests, 0); assert.equal(h.ui.modal && h.ui.modal.type, 'online-consent');
+  assert.equal(h.ui.modal.code, 'ABCDEFG2'); assert.equal(h.ui.modal.join, true);
+});
+test('failed system keyboard falls back to the on-screen pad without a room request', async t => {
+  const h = harness({ safeTop: 84 }); t.after(() => h.ui.destroy());
+  h.platform.request = () => { throw new Error('unexpected'); };
+  h.platform.inputRoomCode = async () => { throw new Error('modal unavailable'); };
+  h.touch('online'); h.ui.codePad = true; h.ui.render();
+  await h.ui.inputOnlineCode();
+  assert.equal(h.ui.codePad, true); assert.match(h.ui.online.error, /屏幕键盘/);
+  withinSafeArea(h, 'keyboard fallback');
+});
+test('waiting room offers a code copy that never includes a token', async t => {
+  const h = harness({ safeTop: 84 }); t.after(() => h.ui.destroy());
+  const copied = [];
+  h.platform.copyRoomCode = async code => { copied.push(code); if (code.includes('token')) throw new Error('secret'); };
+  h.touch('online');
+  h.ui.online.room = { code: 'ABCDEFG2', revision: 0, status: 'waiting', players: [{ seat: 0, profile: h.ui.onlineProfile }], game: null };
+  h.ui.online.token = 'secret-token'; h.ui.onlineChanged();
+  withinSafeArea(h, 'waiting room');
+  assert.ok(h.ui.hitBoxes.some(b => b.id === 'online-copy'));
+  await h.ui.copyOnlineCode();
+  assert.deepEqual(copied, ['ABCDEFG2']);
+  assert.equal(JSON.stringify(copied).includes('secret-token'), false);
 });
 
 test('failed leave is visible above the confirmation modal and keeps a read-only recovery path', async t => {
