@@ -104,7 +104,10 @@ module.exports = {
   },
   async leaveOnline() {
     this.cancelOnlineAvatar();
-    if (this.online.room && !await this.online.leave()) return;
+    if (this.online.room && !await this.online.leave()) {
+      if (!this.destroyed && this.onlineMode && this.online.error) this.showOnlineMessage(this.online.error);
+      return;
+    }
     if (this.destroyed) return;
     this.onlineMode = false; this.state = null; this.gameId = null; this.modal = null;
     this.screen = 'home'; this.selected = null; this.invalidate(); this.render();

@@ -132,8 +132,62 @@ test('server 5xx creation and expired room fail closed without retry polling', a
   const h = setup(); await entered(h); const refresh = h.s.refresh();
   h.respond({ error: { code: 'NOT_FOUND', message: 'expired' } }, 404); await refresh;
   assert.equal(h.s.canMove(), false); assert.equal(h.timers.size, 0); assert.match(h.s.error, /过期/);
-  const leave = h.s.leave(); h.respond({ error: { code: 'NOT_FOUND', message: 'expired' } }, 404);
-  assert.equal(await leave, true); assert.equal(h.s.token, ''); assert.equal(h.s.room, null); h.s.destroy();
+  const calls = h.calls.length;
+  assert.equal(await h.s.leave(), true); assert.equal(h.calls.length, calls, 'expired session exits locally');
+  assert.equal(h.s.token, ''); assert.equal(h.s.room, null); h.s.destroy();
+});
+
+test('unknown leave resumes read-only polling and never blindly resends leave or moves', async () => {
+  const h = setup(); await entered(h); const before = h.s.room;
+  const pending = h.s.leave(); h.fail(); assert.equal(await pending, false);
+  assert.equal(h.s.room, before); assert.equal(h.s.uncertain, true);
+  assert.match(h.s.error, /离开结果未确认/); assert.equal(h.s.canMove(), false);
+  assert.equal(h.timers.size, 1, 'failed leave must not strand the session without polling');
+  await h.s.move(0, 1);
+  const retry = h.s.leave();
+  assert.equal(h.calls.at(-1).method, 'GET', 'another leave tap only checks authority while uncertain');
+  h.respond({ room: room(2) }); assert.equal(await retry, false);
+  assert.equal(h.s.uncertain, false); assert.equal(h.s.room.revision, 2);
+  assert.equal(h.calls.filter(c => c.url.endsWith('/leave')).length, 1);
+  assert.equal(h.calls.filter(c => c.url.endsWith('/moves')).length, 0); h.s.destroy();
+});
+
+test('lost leave response reconciles closed authority without retransmitting mutation', async () => {
+  const h = setup(); await entered(h);
+  const pending = h.s.leave(); h.respond({ error: { message: 'unavailable' } }, 503); await pending;
+  assert.equal(h.timers.size, 1);
+  const tick = [...h.timers.values()][0]; h.timers.clear(); tick();
+  assert.equal(h.calls.at(-1).method, 'GET');
+  h.respond({ error: { message: 'closed' } }, 410); await Promise.resolve(); await Promise.resolve();
+  assert.equal(h.s.expired, true); assert.equal(h.s.uncertain, true);
+  assert.equal(h.timers.size, 0); assert.match(h.s.error, /已关闭/);
+  assert.equal(h.calls.filter(c => c.url.endsWith('/leave')).length, 1); h.s.destroy();
+});
+
+test('pre-leave GET cannot clear unknown leave or replace its snapshot', async () => {
+  const h = setup(); await entered(h); const before = h.s.room;
+  const read = h.s.refresh(), stale = h.queue.shift();
+  const leave = h.s.leave(); h.fail(); await leave;
+  stale.resolve({ statusCode: 200, data: { room: room(2) } }); await read;
+  assert.equal(h.s.room, before); assert.equal(h.s.uncertain, true); assert.equal(h.s.reading, false);
+  assert.equal(h.timers.size, 1); assert.equal(h.s.canMove(), false); h.s.destroy();
+});
+
+test('finished-room unknown leave keeps polling through GET failure, pauses hidden and retires on destroy', async () => {
+  const h = setup(); await entered(h);
+  let game = engine.createGame({ mode: 'pvp' });
+  while (game.winner === null) game = engine.move(game, game.piles.findIndex(n => n > 0), 1);
+  h.s.accept(room(2, game)); h.s.schedule(); assert.equal(h.timers.size, 0);
+  const leave = h.s.leave(); h.fail(); await leave; assert.equal(h.timers.size, 1);
+  const read = h.s.refresh(); h.fail(); await read;
+  assert.equal(h.s.uncertain, true); assert.equal(h.timers.size, 1); assert.match(h.s.error, /刷新/);
+  h.s.setHidden(true); assert.equal(h.timers.size, 0); h.s.setHidden(false);
+  assert.equal(h.calls.at(-1).method, 'GET');
+  h.respond({ room: room(2, game) }); await Promise.resolve(); await Promise.resolve();
+  assert.equal(h.s.uncertain, false); assert.equal(h.timers.size, 0);
+  const late = h.s.leave(); h.s.destroy(); h.fail(); await late;
+  assert.equal(h.s.room, null); assert.equal(h.timers.size, 0);
+  assert.equal(h.calls.filter(c => c.url.endsWith('/moves')).length, 0);
 });
 
 test('out-of-turn seat cannot send any move', async () => {

@@ -673,6 +673,24 @@ test('online lobby is bounded on narrow screen; invites only prefill and never a
   assert.equal(h.ui.hitBoxes.find(b => b.id === 'online-join').disabled, true);
 });
 
+test('failed leave is visible above the confirmation modal and keeps a read-only recovery path', async t => {
+  const h = harness(); t.after(() => h.ui.destroy()); h.touch('online');
+  const game = engine.createGame({ mode: 'pvp' });
+  h.ui.online.room = { code: 'ABCDEFG2', revision: 1, status: 'playing', game,
+    players: [0, 1].map(seat => ({ seat, profile: { avatar: { type: 'preset', index: 0 } } })) };
+  h.ui.online.token = 'test-token-000000000000'; h.ui.online.seat = 0; h.ui.onlineChanged();
+  h.ui.openModal('leave');
+  h.ui.online.leave = async () => { h.ui.online.uncertain = true; h.ui.online.error = '离开结果未确认；正在只读核对房间'; return false; };
+  await h.ui.leaveOnline();
+  assert.equal(h.ui.onlineMode, true); assert.equal(h.ui.screen, 'game');
+  assert.equal(h.ui.modal.type, 'online-message'); assert.match(h.ui.modal.message, /离开结果未确认/);
+  withinSafeArea(h, 'leave error'); h.ui.closeModal();
+  assert.ok(h.ui.hitBoxes.some(box => box.id === 'online-refresh' && !box.disabled));
+  h.ui.openModal('leave'); h.calls.length = 0; h.ui.render();
+  assert.ok(h.calls.some(call => call.method === 'fillText' && String(call.args[0]).includes('离开结果未确认')),
+    'reopening leave confirmation must not hide the recovery error');
+});
+
 test('Canvas consent does not wait for a native confirmation promise that never calls back', async t => {
   const h = harness({ safeTop: 84 }); t.after(() => h.ui.destroy()); h.touch('online');
   let nativeCalls = 0, entered = 0;
