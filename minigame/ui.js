@@ -761,7 +761,8 @@ class GameUI {
         if (this.online.error) this.text(this.online.error, innerX, y + 166, 12, GOLD, 'left', 'normal', innerW);
         return;
       case 'leave':
-        content = this.onlineMode ? '离开将关闭双方的房间并撤销会话；本局不计入本地战绩。' : '离开后这一局不会保留。\n\n未结束的对局不会计入战绩。';
+        content = this.onlineMode ? '离开将关闭双方的房间并撤销会话；本局不计入本地战绩。' +
+          (this.online.error ? '\n\n' + this.online.error : '') : '离开后这一局不会保留。\n\n未结束的对局不会计入战绩。';
         actions = [['继续玩', () => this.closeModal()], ['离开', () => this.goHome()]];
         break;
       case 'restart':
