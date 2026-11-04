@@ -3,7 +3,7 @@
   "projectname": "357-wechat-minigame",
   "compileType": "game",
   "miniprogramRoot": "minigame/",
-  "appid": "touristappid",
+  "appid": "wx46a3b29052435339",
   "setting": {
     "es6": true,
     "minified": true,
