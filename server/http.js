@@ -39,7 +39,7 @@ function createHTTPServer(options = {}) {
     return body;
   }
   function respond(res, status, body) {
-    res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store',
+    res.writeHead(status, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store',
       'X-Content-Type-Options': 'nosniff', 'Referrer-Policy': 'no-referrer', 'Content-Security-Policy': "default-src 'none'", 'Connection': 'close' });
     res.end(JSON.stringify(body));
   }
@@ -69,9 +69,9 @@ function createHTTPServer(options = {}) {
       if (kind === 'create') {
         const body = await readBody(req);
         if (Object.keys(body).length !== 1 || !Object.hasOwn(body, 'profile')) throw new RoomError(400, 'INVALID_PROFILE', '仅接受本局头像资料');
-        return respond(res, 201, service.create(body.profile));
+        return respond(res, 200, service.create(body.profile));
       }
-      const match = /^\/v1\/rooms\/([A-HJ-NP-Z2-9]{8})(?:\/(join|moves|leave))?$/.exec(url.pathname);
+      const match = /^\/v1\/rooms\/([0-9]{4})(?:\/(join|moves|leave))?$/.exec(url.pathname);
       if (!match || !CODE.test(match[1])) throw new RoomError(404, 'NOT_FOUND', '接口不存在');
       const [, code, action] = match;
       if (req.method === 'POST' && action === 'join') {
