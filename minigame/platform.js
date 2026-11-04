@@ -128,6 +128,11 @@ function createPlatform(wx) {
         placeholderText: '8位房间码', confirmText: '预填', cancelText: '取消' });
       return result.confirm ? result.content : null;
     },
+    async copyRoomCode(code) {
+      if (!CODE.test(code)) throw new Error('房间码无效');
+      // Copy only the invitation code. Never copy a token, endpoint, or share query.
+      await call('setClipboardData', { data: code });
+    },
     async confirmProfile() {
       const result = await call('showModal', { title: '确认进入内测房间',
         content: '自选头像将发送到357内测服务并仅向本房间对手展示，房间过期清除。内置形象不含你的个人头像。是否继续？',

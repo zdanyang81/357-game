@@ -2,7 +2,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const engine = require('../minigame/core/engine');
-const { OnlineSession, inviteCode, CODE } = require('../minigame/online');
+const { OnlineSession, inviteCode, normalizeCode, codeIssue, CODE, ALPHABET } = require('../minigame/online');
 const { createRoomService, CODE: SERVER_CODE } = require('../server/rooms');
 const code = 'ABCDEFG2', token = 'test-token-000000000000000000';
 const preset = { avatar: { type: 'preset', index: 0 } };
@@ -25,6 +25,14 @@ test('all code validators match server alphabet including 8/9 and excluding I/O/
     assert.equal(inviteCode({ room: value }), SERVER_CODE.test(value) ? value : '', value);
   }
   assert.equal(inviteCode({ room: ' abcdef89 ' }), 'ABCDEF89');
+  assert.equal(normalizeCode(' 房间码：ａｂｃｄｅｆｇ２ '), 'ABCDEFG2');
+  assert.equal(inviteCode({ room: '房间码 ABCDEFG2' }), 'ABCDEFG2');
+  assert.equal(normalizeCode('ABCDEFG0'), 'ABCDEFG0');
+  assert.match(codeIssue('ABCDEFG0'), /0\/1/);
+  assert.match(codeIssue('ABC'), /3位/);
+  assert.equal(codeIssue('ABCDEFG2'), '');
+  assert.equal(ALPHABET.length, 32);
+  assert.equal(/[IO01]/.test(ALPHABET), false);
 });
 
 test('real room service responses with 8/9 flow through two OnlineSessions end to end', async t => {

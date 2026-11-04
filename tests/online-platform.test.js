@@ -58,6 +58,15 @@ test('cold/hot query forwarded and invitation contains room only, never token', 
   assert.equal(h.calls.filter(c => c[0] === 'share').at(-1)[1].query, 'room=ABCDEF89');
   for (const invalid of ['invalid', 'ABCDEFIO', 'ABCDEF01']) assert.throws(() => h.p.inviteRoom(invalid)); h.p.destroy();
 });
+test('copy sends only the room code and refuses tokens or invalid codes', async () => {
+  const h = fixture();
+  h.wx.setClipboardData = options => { h.calls.push(['copy', options.data]); options.success({}); };
+  await h.p.copyRoomCode('ABCDEFG2');
+  assert.deepEqual(h.calls.find(c => c[0] === 'copy'), ['copy', 'ABCDEFG2']);
+  await assert.rejects(h.p.copyRoomCode('token-secret'), /无效/);
+  await assert.rejects(h.p.copyRoomCode('ABCDEFG2&token=secret'), /无效/);
+  h.p.destroy();
+});
 test('room invitations opt out of current-group forwarding so the user can select another conversation', () => {
   const h = fixture();
   try {

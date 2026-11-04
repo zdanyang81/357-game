@@ -1,7 +1,25 @@
 'use strict';
 const engine = require('./core/engine');
+const ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
 const CODE = /^[A-HJ-NP-Z2-9]{8}$/;
-const normalizeCode = value => typeof value === 'string' ? value.trim().toUpperCase() : '';
+function normalizeCode(value) {
+  if (typeof value !== 'string') return '';
+  // Fullwidth IME digits/letters are common when two people read a code across WeChat.
+  // Strip only a label and whitespace; never drop I/O/0/1, or a mistype could join another room.
+  return value.trim()
+    .replace(/[Ａ-Ｚａ-ｚ０-９]/g, ch => String.fromCharCode(ch.charCodeAt(0) - 0xFEE0))
+    .toUpperCase()
+    .replace(/^房间码[:：]?/, '')
+    .replace(/\s+/g, '');
+}
+function codeIssue(value) {
+  const code = normalizeCode(value);
+  if (CODE.test(code)) return '';
+  if (!code) return '请先输入8位房间码';
+  if (/[IO01]/.test(code)) return '房间码不含字母I/O和数字0/1，请逐位核对';
+  if (code.length !== 8) return '房间码必须是8位，当前' + code.length + '位';
+  return '房间码只能是大写字母和数字，且不含I/O、0/1';
+}
 function inviteCode(query) { const code = normalizeCode(query && query.room); return CODE.test(code) ? code : ''; }
 function validRoom(room) {
   return !!room && CODE.test(room.code) && Number.isSafeInteger(room.revision) && room.revision >= 0 &&
@@ -138,4 +156,4 @@ class OnlineSession {
   setHidden(hidden) { this.hidden = hidden; this.stopTimer(); if (!hidden) this.refresh(); }
   destroy() { this.stopTimer(); this.epoch++; this.destroyed = true; this.token = ''; this.room = null; }
 }
-module.exports = { OnlineSession, inviteCode, normalizeCode, validRoom, CODE };
+module.exports = { OnlineSession, inviteCode, normalizeCode, codeIssue, validRoom, CODE, ALPHABET };
