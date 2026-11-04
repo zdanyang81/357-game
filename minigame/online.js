@@ -25,7 +25,7 @@ class OnlineSession {
   stopTimer() { if (this.timer !== null) this.p.clearTimeout(this.timer); this.timer = null; }
   schedule() {
     this.stopTimer();
-    if (this.hidden || this.destroyed || this.expired || !this.token || this.busy || this.reading || this.room.status === 'finished') return;
+    if (this.hidden || this.destroyed || this.expired || !this.token || this.busy || this.reading || (this.room.status === 'finished' && !this.uncertain)) return;
     this.timer = this.p.setTimeout(() => { this.timer = null; this.refresh(); }, 1500);
   }
   request(method, path, data, auth) {
@@ -109,7 +109,15 @@ class OnlineSession {
     this.room.status === 'playing' && this.room.game.currentPlayer === this.seat; }
   async leave() {
     if (!this.token || this.busy || this.destroyed) return false;
-    const epoch = this.epoch; this.busy = true; this.stopTimer(); this.notify();
+    if (this.expired) {
+      // Authority already confirmed this session is gone: discard locally, never resend leave.
+      this.stopTimer(); this.epoch++; this.token = ''; this.room = null; this.seat = null;
+      this.reading = false; this.uncertain = false; this.error = ''; this.notify(); return true;
+    }
+    if (this.uncertain) { await this.refresh(); return false; }
+    // A GET started before this mutation cannot confirm its outcome.
+    const epoch = ++this.epoch; this.reading = false;
+    this.busy = true; this.stopTimer(); this.error = ''; this.notify();
     try {
       await this.request('POST', '/v1/rooms/' + this.room.code + '/leave', {}, true);
       if (epoch !== this.epoch || this.destroyed) return false;
@@ -120,7 +128,10 @@ class OnlineSession {
         this.epoch++; this.token = ''; this.room = null; this.seat = null; this.busy = false; this.reading = false;
         this.error = '房间或会话已失效'; this.notify(); return true;
       }
-      if (epoch === this.epoch) { this.error = '离开结果未确认；请刷新核实或等待过期'; this.busy = false; this.uncertain = true; this.notify(); }
+      if (epoch === this.epoch && !this.destroyed) {
+        this.error = '离开结果未确认；正在只读核对房间，可手动刷新';
+        this.busy = false; this.uncertain = true; this.notify(); this.schedule();
+      }
       return false;
     }
   }
