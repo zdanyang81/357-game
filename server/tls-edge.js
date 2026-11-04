@@ -23,7 +23,7 @@ function allowed(method, path) {
   const match = /^\/v1\/rooms\/[A-HJ-NP-Z2-9]{8}(?:\/(join|moves|leave))?$/.exec(path || '');
   return !!match && (match[1] ? method === 'POST' : method === 'GET');
 }
-function responseHeaders(type = 'application/json; charset=utf-8') {
+function responseHeaders(type = 'application/json') {
   return { 'Content-Type': type, 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff',
     'Referrer-Policy': 'no-referrer', 'Content-Security-Policy': "default-src 'none'", 'Connection': 'close' };
 }
@@ -88,7 +88,7 @@ function createRequestHandler(options = {}) {
           });
           incoming.on('error', () => fail(502, 'UPSTREAM_UNAVAILABLE'));
           incoming.on('aborted', () => fail(502, 'UPSTREAM_UNAVAILABLE'));
-          incoming.on('end', () => finish(incoming.statusCode || 502, Buffer.concat(output), 'application/json; charset=utf-8'));
+          incoming.on('end', () => finish(incoming.statusCode || 502, Buffer.concat(output), 'application/json'));
         });
         upstream.on('error', () => fail(502, 'UPSTREAM_UNAVAILABLE'));
         upstream.end(Buffer.concat(chunks));

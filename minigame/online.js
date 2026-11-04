@@ -48,8 +48,21 @@ function normalizePayload(data) {
   }
   return data;
 }
-function formatError() {
-  const error = new Error('房间响应格式错误');
+function formatError(data, status) {
+  const body = data && typeof data === 'object' ? data : null;
+  const room = body && body.room;
+  const kind = data == null ? 'empty' : Array.isArray(data) ? 'array' : typeof data;
+  let check = 'shape';
+  if (body && body.error && body.error.code) check = 'err';
+  else if (!body || !body.room) check = 'noroom';
+  else if (body.roomCode !== room.code) check = 'code';
+  else if (![0, 1].includes(body.seat)) check = 'seat';
+  else if (typeof body.token !== 'string' || body.token.length < 16) check = 'token';
+  else if (!CODE.test(room.code || '')) check = 'roomcode';
+  else if (!Number.isSafeInteger(room.revision)) check = 'revision';
+  else if (!['waiting', 'playing', 'finished'].includes(room.status)) check = 'status';
+  else check = 'players';
+  const error = new Error('房间响应格式错误（' + (status || '?') + ' ' + kind + ' ' + check + '）');
   error.definite = true;
   return error;
 }
@@ -78,16 +91,20 @@ class OnlineSession {
     if (this.accessKey) header['X-357-Access-Key'] = this.accessKey;
     return this.p.request({ url: this.base + path, method, data, header, timeout: 8000, dataType: 'json' }).then(res => {
       const body = normalizePayload(res && res.data);
-      if (!res || res.statusCode < 200 || res.statusCode >= 300) {
-        const detail = body && body.error;
+      const status = Number(res && (res.statusCode != null ? res.statusCode : res.status));
+      const detail = body && body.error;
+      const completed = Number.isInteger(status) && status >= 200 && status < 300;
+      if (!res || !completed || (detail && !body.room)) {
         const error = new Error(detail && detail.message || '服务暂不可用');
-        error.code = detail && detail.code; error.statusCode = res && res.statusCode; error.definite = !!res && res.statusCode >= 400 && res.statusCode < 500; throw error;
+        error.code = detail && detail.code; error.statusCode = status;
+        error.definite = (status >= 400 && status < 500) || (completed && !!(detail && detail.message));
+        throw error;
       }
       return body;
     });
   }
   accept(room) {
-    if (!validRoom(room) || (this.room && room.code !== this.room.code)) throw formatError();
+    if (!validRoom(room) || (this.room && room.code !== this.room.code)) throw formatError({ room }, 200);
     if (this.room && room.revision < this.room.revision) return;
     this.room = room;
   }
@@ -100,7 +117,7 @@ class OnlineSession {
       const data = await this.request('POST', code ? '/v1/rooms/' + normalized + '/join' : '/v1/rooms', { profile }, false);
       if (epoch !== this.epoch || this.destroyed) return false;
       if (!data || !validRoom(data.room) || data.roomCode !== data.room.code || ![0, 1].includes(data.seat) ||
-          typeof data.token !== 'string' || data.token.length < 16) throw formatError();
+          typeof data.token !== 'string' || data.token.length < 16) throw formatError(data, 200);
       this.accept(data.room); this.token = data.token; this.seat = data.seat; this.uncertain = false; this.expired = false;
       return true;
     } catch (error) {

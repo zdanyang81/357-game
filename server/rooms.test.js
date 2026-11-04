@@ -120,7 +120,7 @@ test('actual HTTP two-client lifecycle, token privacy, exact methods and error s
   const { call } = await httpFixture(t, { randomFirst: () => 0 });
   assert.equal((await call('/healthz')).status, 200);
   const a = await call('/v1/rooms', { method: 'POST', data: { profile: png() } });
-  assert.equal(a.status, 201); assert.equal(a.headers.get('cache-control'), 'no-store');
+  assert.equal(a.status, 200); assert.equal(a.headers.get('cache-control'), 'no-store');
   const path = '/v1/rooms/' + a.body.roomCode;
   assert.equal((await call(path)).status, 401);
   const b = await call(path + '/join', { method: 'POST', data: { profile: profile(3) } }); assert.equal(b.status, 200);

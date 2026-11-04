@@ -89,7 +89,7 @@ test('a received but unusable room body does not freeze another attempt', async 
   h.respond({ roomCode: code, token, seat: 0, room: { code, revision: 0, status: 'waiting', players: [] } }, 200);
   assert.equal(await pending, false);
   assert.equal(h.s.creationUnknown, false);
-  assert.match(h.s.error, /格式错误/);
+  assert.match(h.s.error, /格式错误（200 object players）/);
   h.s.destroy();
 });
 test('invitations validate only room code; never accept external endpoint/token', () => {
