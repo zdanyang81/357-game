@@ -196,8 +196,7 @@ module.exports = {
       const cx = x + i * (cell + gap);
       this.panel(cx, y, cell, h, '#183a2d', i < code.length ? '#d8b674' : '#385743', 6);
       const ch = code[i] || '';
-      if (/^[0-9]$/.test(ch)) this.drawDigit(Number(ch), cx + 3, y + 3, Math.max(8, cell - 6), Math.max(8, h - 6));
-      else if (ch) this.text(ch, cx + cell / 2, y + h / 2, Math.min(16, cell * 0.5), '#f2ecd9', 'center', 'bold');
+      if (ch) this.text(ch, cx + cell / 2, y + h / 2, Math.min(22, cell * 0.62), '#f2ecd9', 'center', 'bold');
     }
   },
   drawCodePad() {
@@ -211,22 +210,16 @@ module.exports = {
       const keys = [...LEGACY_ALPHABET].slice(this.codePadPage ? 16 : 0, this.codePadPage ? 32 : 16);
       keys.forEach((ch, i) => {
         const col = i % cols, row = Math.floor(i / cols);
-        this.button('code-key-' + ch, /^[0-9]$/.test(ch) ? '' : ch, x + col * (keyW + gap), y + row * (keyH + gap), keyW, keyH,
-          () => this.appendRoomCode(ch), { disabled: this.online.busy || this.onlineCode.length >= limit, size: 16 });
-        if (/^[0-9]$/.test(ch)) {
-          const box = this.hitBoxes[this.hitBoxes.length - 1];
-          this.drawDigit(Number(ch), box.x + 12, box.y + 6, box.w - 24, box.h - 12);
-        }
+        this.button('code-key-' + ch, ch, x + col * (keyW + gap), y + row * (keyH + gap), keyW, keyH,
+          () => this.appendRoomCode(ch), { disabled: this.online.busy || this.onlineCode.length >= limit, size: 18 });
       });
       y += 4 * keyH + 3 * gap + 6;
     } else {
       const cols = 5, keyH = 44, keyW = (span - gap * (cols - 1)) / cols;
       '0123456789'.split('').forEach((ch, i) => {
         const col = i % cols, row = Math.floor(i / cols);
-        this.button('code-key-' + ch, '', x + col * (keyW + gap), y + row * (keyH + gap), keyW, keyH,
-          () => this.appendRoomCode(ch), { disabled: this.online.busy || this.onlineCode.length >= limit });
-        const box = this.hitBoxes[this.hitBoxes.length - 1];
-        this.drawDigit(Number(ch), box.x + 10, box.y + 6, box.w - 20, box.h - 12);
+        this.button('code-key-' + ch, ch, x + col * (keyW + gap), y + row * (keyH + gap), keyW, keyH,
+          () => this.appendRoomCode(ch), { disabled: this.online.busy || this.onlineCode.length >= limit, size: 20 });
       });
       y += 2 * keyH + gap + 6;
     }

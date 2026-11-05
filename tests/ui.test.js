@@ -670,8 +670,8 @@ test('online lobby is bounded on narrow screen; invites only prefill and never a
   h.emit('show', { query: { room: '8024' } }); assert.equal(h.ui.onlineCode, '8024');
   h.touch('online-code'); withinSafeArea(h, 'room code pad');
   assert.equal(h.ui.hitBoxes.find(b => b.id === 'online-join').disabled, false);
-  assert.equal(h.calls.filter(call => call.method === 'fillText' && String(call.args[0]).includes('8024')).length, 0);
-  assert.ok(h.calls.some(call => call.method === 'fillRect'), 'room digits are drawn as shapes, not font glyphs');
+  for (const digit of '0123456789') assert.ok(h.ui.hitBoxes.some(box => box.id === 'code-key-' + digit), 'missing number key ' + digit);
+  assert.ok(h.calls.some(call => call.method === 'fillText' && call.args[0] === '8'), 'room digits are visible text, not blank keys');
   h.ui.onlineCode = '12ab'; h.ui.render();
   assert.equal(h.ui.hitBoxes.find(b => b.id === 'online-join').disabled, true);
 });
