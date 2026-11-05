@@ -88,15 +88,26 @@ function harness(options = {}) {
       const x = (platform.width - total) / 2 + position * (size + 5) + size / 2;
       this.emit('touch', { x, y: strip.y + strip.h / 2 });
     },
+    clockTimers() {
+      return [...timers.entries()].filter(([, timer]) => timer.fn && timer.fn.turnClock);
+    },
     step() {
-      const next = [...timers.entries()].sort((a, b) => a[1].due - b[1].due || a[0] - b[0])[0];
+      const next = [...timers.entries()].filter(([, timer]) => !(timer.fn && timer.fn.turnClock))
+        .sort((a, b) => a[1].due - b[1].due || a[0] - b[0])[0];
       if (!next) return false;
       timers.delete(next[0]); clock = next[1].due; next[1].fn(); return true;
     },
     flush(limit = 200) {
       let steps = 0;
-      while (timers.size && steps++ < limit) this.step();
-      assert.equal(timers.size, 0, 'timer loop did not settle');
+      while ([...timers.values()].some(timer => !(timer.fn && timer.fn.turnClock)) && steps++ < limit) this.step();
+      assert.equal([...timers.values()].filter(timer => !(timer.fn && timer.fn.turnClock)).length, 0, 'timer loop did not settle');
+    },
+    expireTurn() {
+      assert.equal(typeof ui.turnDeadline, 'number');
+      clock = ui.turnDeadline;
+      const next = this.clockTimers().sort((a, b) => a[1].due - b[1].due || a[0] - b[0])[0];
+      assert.ok(next, 'no turn clock');
+      timers.delete(next[0]); next[1].fn();
     },
     toPhase(phase) {
       for (let tries = 0; ui.phase !== phase && tries < 30; tries++) assert.ok(this.step());
@@ -139,7 +150,8 @@ test('existing opener compatibility restores legacy local saves with aiFirst set
     const h = harness({ data: { [KEYS.save]: { version: 1, id: 'legacy-local', state, assisted: false } } });
     t.after(() => h.ui.destroy());
     assert.equal(h.ui.modal.type, 'restore'); h.touch('modal-action-1');
-    assert.deepEqual(h.ui.state, state); assert.equal(h.ui.timers.size, 0);
+    assert.deepEqual(h.ui.state, state);
+    assert.equal([...h.timers.values()].filter(timer => !(timer.fn && timer.fn.turnClock)).length, 0);
     h.ui.select(1, 1); h.ui.confirmMove(); h.flush();
     assert.ok(engine.validateState(h.ui.state));
   }
@@ -257,7 +269,7 @@ test('rapid confirm taps cannot double-commit during animation or AI thinking', 
   assert.equal(h.ui.state.history.length, 1); assert.equal(h.ui.phase, 'animating');
   h.toPhase('thinking');
   for (let i = 0; i < 20; i++) { h.ui.scheduleAI(); h.touch('confirm'); h.die(2, 3); }
-  assert.equal(h.timers.size, 1); assert.equal(h.ui.state.history.length, 1);
+  assert.equal([...h.timers.values()].filter(timer => !(timer.fn && timer.fn.turnClock)).length, 1); assert.equal(h.ui.state.history.length, 1);
   h.flush(); assert.equal(h.ui.state.history.length, 2); assert.equal(h.ui.state.currentPlayer, 0);
   assert.equal(h.ui.locked, false); assert.equal(h.ui.selected, null);
 });
@@ -501,7 +513,8 @@ test('home and game share fixed single-page rules without changing a selected po
   assert.equal(readRules(), homeRules); h.ui.select(0, 1); h.touch('modal-close');
   assert.deepEqual(h.ui.state, state); assert.deepEqual(h.ui.selected, selected);
   assert.deepEqual(h.data[KEYS.save], saved); assert.equal(h.ui.gameId, id);
-  assert.equal(h.ui.assisted, false); assert.equal(h.ui.stats.results.length, 0); assert.equal(h.timers.size, 0);
+  assert.equal(h.ui.assisted, false); assert.equal(h.ui.stats.results.length, 0);
+  assert.equal([...h.timers.values()].filter(timer => !(timer.fn && timer.fn.turnClock)).length, 0);
   h.touch('confirm'); h.flush(); assert.deepEqual(h.ui.state.piles, [3, 2, 7]);
 });
 
@@ -552,7 +565,7 @@ test('actual move animation highlights, rises and fades frame by frame; not only
     return originalDice.apply(this, args);
   };
   h.ui.confirmMove(); assert.equal(h.ui.phase, 'animating'); assert.equal(h.ui.state.history.length, 1);
-  assert.ok([...h.timers.values()].every(timer => timer.due <= 16), 'frames are scheduled at display rate');
+  assert.ok([...h.timers.values()].filter(timer => !(timer.fn && timer.fn.turnClock)).every(timer => timer.due <= 16), 'frames are scheduled at display rate');
   h.flush(); h.ui.dice = originalDice;
   assert.equal(h.ui.motion, null); assert.equal(h.ui.phase, 'idle'); assert.equal(h.ui.state.history.length, 1);
   const progress = [...new Set(overlays.map(o => o.progress))];
@@ -907,4 +920,35 @@ test('avatar refusal and late choice preserve playable preset without sending an
   resolve({ avatar: { type: 'image', data: 'data:image/png;base64,aGVsbG8=' } }); await pending;
   assert.equal(h.ui.onlineProfile.avatar.type, 'preset');
   h.emit('show'); assert.equal(h.ui.profileBusy, false); assert.equal(h.ui.online.token, '');
+});
+
+test('a human turn lasts 30 seconds, then takes one die and gives the next player a fresh turn', t => {
+  const h = harness(); t.after(() => h.ui.destroy());
+  pvp(h);
+  assert.equal(h.ui.turnSecondsLeft(), 30);
+  h.ui.select(2, 4);
+  h.expireTurn();
+  assert.equal(h.ui.toast, '超时，已自动取 1 颗');
+  assert.equal(h.ui.selected, null);
+  h.flush();
+  assert.deepEqual(h.ui.state.piles, [2, 5, 7]);
+  assert.equal(h.ui.state.history.length, 1);
+  assert.equal(h.ui.state.history[0].count, 1);
+  assert.equal(h.ui.state.currentPlayer, 1);
+  assert.equal(h.ui.turnSecondsLeft(), 30);
+});
+
+test('avatars are chosen on the home screen and are not editable during a match', t => {
+  const h = harness(); t.after(() => h.ui.destroy());
+  assert.equal(h.ui.screen, 'home');
+  assert.ok(h.ui.hitBoxes.some(b => b.id === 'avatar-0'));
+  h.touch('avatar-0');
+  assert.equal(h.ui.modal.type, 'avatars');
+  h.touch('choose-avatar-1');
+  assert.deepEqual(h.ui.settings.avatars, [1, 3]);
+  assert.equal(h.ui.screen, 'home');
+  h.touch('start');
+  assert.equal(h.ui.screen, 'game');
+  assert.equal(h.ui.state.avatars[0], 1);
+  assert.ok(h.ui.hitBoxes.every(b => !b.id.startsWith('avatar') && !b.id.startsWith('choose-avatar')));
 });

@@ -90,11 +90,25 @@ function createRoomService(options = {}) {
   const now = options.now || Date.now, idleMs = options.idleMs || 30 * 60 * 1000, maxAgeMs = options.maxAgeMs || 4 * 60 * 60 * 1000;
   const capacity = options.capacity || 100, rooms = new Map();
   const randomFirst = options.randomFirst || (() => crypto.randomInt(2));
+  const turnMs = options.turnMs || 30000;
   function sweep() {
     const time = now();
     for (const [code, room] of rooms) if (time >= room.expiresAt) rooms.delete(code);
   }
   function touch(room) { room.expiresAt = Math.min(now() + idleMs, room.createdAt + maxAgeMs); }
+  // Authoritative 30s human turn. A missed poll catches up one die per elapsed window, alternating seats.
+  function enforceTurn(room) {
+    for (let guard = 0; guard < 16 && room.status === 'playing' && room.game && room.game.winner === null &&
+        typeof room.turnDeadline === 'number' && now() >= room.turnDeadline; guard++) {
+      const row = room.game.piles.findIndex(count => count > 0);
+      if (row < 0) { room.turnDeadline = null; return; }
+      let next;
+      try { next = engine.move(room.game, row, 1); } catch (_) { room.turnDeadline = null; return; }
+      room.game = next; room.revision++;
+      if (next.winner !== null) { room.status = 'finished'; room.turnDeadline = null; return; }
+      room.turnDeadline += turnMs;
+    }
+  }
   function get(code) {
     sweep();
     if (!CODE.test(code || '') || !rooms.has(code)) fail(404, 'ROOM_NOT_FOUND', '房间不存在、已离开或已过期');
@@ -108,6 +122,7 @@ function createRoomService(options = {}) {
   }
   function snapshot(room) {
     return clone({ code: room.code, revision: room.revision, status: room.status,
+      turnDeadline: typeof room.turnDeadline === 'number' ? room.turnDeadline : null,
       players: room.members.map((item, seat) => ({ seat, profile: item.profile })), game: room.game, expiresAt: room.expiresAt });
   }
   function credentials(room, seat) { return { roomCode: room.code, seat, token: room.members[seat].token, room: snapshot(room) }; }
@@ -117,7 +132,7 @@ function createRoomService(options = {}) {
       if (rooms.size >= capacity) fail(503, 'ROOM_CAPACITY', '当前内测房间已满，请稍后再试');
       let code;
       do { code = String(crypto.randomInt(10000)).padStart(4, '0'); } while (rooms.has(code));
-      const room = { code, createdAt: now(), expiresAt: 0, revision: 0, status: 'waiting', game: null,
+      const room = { code, createdAt: now(), expiresAt: 0, revision: 0, status: 'waiting', game: null, turnDeadline: null,
         members: [{ token: crypto.randomBytes(32).toString('hex'), profile: clean, actions: new Map() }] };
       touch(room); rooms.set(code, room); return credentials(room, 0);
     },
@@ -129,15 +144,16 @@ function createRoomService(options = {}) {
       room.members.push({ token: crypto.randomBytes(32).toString('hex'), profile: clean, actions: new Map() });
       room.game = engine.createGame({ mode: 'pvp', aiFirst: first === 1,
         avatars: room.members.map((m, seat) => m.profile.avatar.type === 'preset' ? m.profile.avatar.index : seat ? 3 : 0) });
-      room.status = 'playing'; room.revision++; touch(room); return credentials(room, 1);
+      room.status = 'playing'; room.turnDeadline = now() + turnMs; room.revision++; touch(room); return credentials(room, 1);
     },
-    read(code, token) { const room = get(code); member(room, token); touch(room); return { room: snapshot(room) }; },
+    read(code, token) { const room = get(code); member(room, token); enforceTurn(room); touch(room); return { room: snapshot(room) }; },
     move(code, token, body) {
       const room = get(code), seat = member(room, token);
       if (!object(body, ['actionId', 'expectedRevision', 'row', 'count']) || !/^[A-Za-z0-9_-]{8,80}$/.test(body.actionId || '') ||
           !Number.isSafeInteger(body.expectedRevision) || body.expectedRevision < 0 || !Number.isInteger(body.row) || !Number.isInteger(body.count)) {
         fail(400, 'INVALID_MOVE', '落子请求格式无效');
       }
+      enforceTurn(room);
       const fingerprint = JSON.stringify([body.expectedRevision, body.row, body.count]);
       const actions = room.members[seat].actions;
       if (actions.has(body.actionId)) {
@@ -149,7 +165,9 @@ function createRoomService(options = {}) {
       if (room.game.currentPlayer !== seat) fail(409, 'OUT_OF_TURN', '尚未轮到你落子');
       let next;
       try { next = engine.move(room.game, body.row, body.count); } catch (_) { fail(400, 'ILLEGAL_MOVE', '每次只能从一排拿至少一颗骰子'); }
-      room.game = next; room.revision++; if (next.winner !== null) room.status = 'finished';
+      room.game = next; room.revision++;
+      if (next.winner !== null) { room.status = 'finished'; room.turnDeadline = null; }
+      else room.turnDeadline = now() + turnMs;
       actions.set(body.actionId, fingerprint); // At most 15 legal moves exist in a match.
       touch(room); return { room: snapshot(room) };
     },

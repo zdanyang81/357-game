@@ -155,16 +155,18 @@ class GameUI {
     }
   }
 
-  later(fn, ms) { return this.schedule(fn, ms, false); }
-  nextFrame(fn) { return this.schedule(fn, 16, true); }
+  later(fn, ms, turnClock) { return this.schedule(fn, ms, false, turnClock); }
+  nextFrame(fn) { return this.schedule(fn, 16, true, false); }
 
-  schedule(fn, ms, frame) {
+  schedule(fn, ms, frame, turnClock) {
     const epoch = this.epoch, p = this.platform, handle = {};
     const run = () => {
       this.timers.delete(handle);
       if (this.destroyed || this.hidden || epoch !== this.epoch) return;
       try { fn(); } catch (error) { this.fail(error); }
     };
+    // Tests skip callbacks marked this way so a visible countdown cannot autoplay a flush.
+    if (turnClock) run.turnClock = true;
     if (frame && typeof p.requestAnimationFrame === 'function') {
       const id = p.requestAnimationFrame(run);
       handle.cancel = () => p.cancelAnimationFrame(id);
@@ -177,6 +179,90 @@ class GameUI {
   }
 
   now() { return typeof this.platform.now === 'function' ? this.platform.now() : Date.now(); }
+
+  activeDeadline() {
+    if (this.onlineMode) {
+      const deadline = this.online && this.online.room && this.online.room.turnDeadline;
+      return typeof deadline === 'number' && Number.isFinite(deadline) ? deadline : null;
+    }
+    return typeof this.turnDeadline === 'number' ? this.turnDeadline : null;
+  }
+
+  turnSecondsLeft() {
+    const deadline = this.activeDeadline();
+    if (deadline == null || !this.state || this.state.winner !== null || (!this.onlineMode && this.isAI())) return null;
+    return Math.max(0, Math.ceil((deadline - this.now()) / 1000));
+  }
+
+  humanTurnReady() {
+    return !this.destroyed && !this.hidden && this.screen === 'game' && !!this.state &&
+      this.state.winner === null && !this.modal && !this.locked && !this.isAI();
+  }
+
+  // Each human turn gets 30 seconds. Timing out takes one die from the first row that still has any.
+  beginTurnClock() {
+    this.turnPaused = null;
+    if (!this.onlineMode) {
+      if (!this.humanTurnReady()) { this.turnDeadline = null; return; }
+      this.turnDeadline = this.now() + 30000;
+    }
+    this.armTurnClock();
+  }
+
+  armTurnClock() {
+    const token = (this.turnClockToken = (this.turnClockToken || 0) + 1);
+    const deadline = this.activeDeadline();
+    if (deadline == null || this.destroyed || this.hidden || this.screen !== 'game' || !this.state || this.state.winner !== null) return;
+    const fire = () => {
+      if (token !== this.turnClockToken || this.destroyed || this.hidden) return;
+      const current = this.activeDeadline();
+      if (current == null || this.screen !== 'game' || !this.state || this.state.winner !== null) return;
+      if (this.now() + 25 >= current) {
+        if (this.onlineMode) {
+          if (this.online && !this.online.busy && !this.online.reading) this.online.refresh();
+        } else if (this.humanTurnReady()) this.applyTurnTimeout();
+        else this.later(fire, 200, true);
+        return;
+      }
+      if (!this.modal) this.render();
+      this.later(fire, Math.min(1000, Math.max(16, current - this.now())), true);
+    };
+    this.later(fire, Math.min(1000, Math.max(16, deadline - this.now())), true);
+  }
+
+  applyTurnTimeout() {
+    if (this.onlineMode || !this.humanTurnReady()) return;
+    const row = this.state.piles.findIndex(count => count > 0);
+    if (row < 0) return;
+    this.turnDeadline = null;
+    this.turnClockToken = (this.turnClockToken || 0) + 1;
+    this.selected = null;
+    try {
+      this.commitMove(row, 1);
+      this.toast = '超时，已自动取 1 颗';
+    } catch (error) { this.fail(error); }
+  }
+
+  // Hide and rule dialogs stop the ticker. Remaining time is kept; background never moves.
+  pauseTurnClock() {
+    if (!this.onlineMode && typeof this.turnDeadline === 'number') {
+      this.turnPaused = Math.max(0, this.turnDeadline - this.now());
+      this.turnDeadline = null;
+    }
+    this.turnClockToken = (this.turnClockToken || 0) + 1;
+  }
+
+  resumeTurnClock() {
+    if (this.destroyed || this.hidden || this.screen !== 'game' || !this.state || this.state.winner !== null) return;
+    if (this.onlineMode) { this.armTurnClock(); return; }
+    if (this.modal || this.locked || this.isAI()) return;
+    if (this.turnDeadline == null) {
+      if (typeof this.turnPaused !== 'number') return;
+      this.turnDeadline = this.now() + this.turnPaused;
+      this.turnPaused = null;
+    }
+    this.armTurnClock();
+  }
 
   invalidate() {
     this.epoch += 1;
@@ -221,6 +307,7 @@ class GameUI {
       this.gameId = Date.now().toString(36) + '-' + (++this.serial) + '-' + Math.random().toString(36).slice(2, 10);
       this.assisted = false; this.selected = null; this.modal = null; this.toast = ''; this.shareStatus = '';
       this.resumeCandidate = null; this.screen = 'game';
+      this.beginTurnClock();
       this.save(); this.render(); this.scheduleAI();
     } catch (error) { this.fail(error); }
   }
@@ -240,7 +327,7 @@ class GameUI {
     this.assisted = saved.assisted; this.selected = null; this.resumeCandidate = null;
     this.modal = null; this.screen = 'game';
     if (this.state.winner !== null) this.finish();
-    else { this.render(); this.scheduleAI(); }
+    else { this.beginTurnClock(); this.render(); this.scheduleAI(); }
   }
 
   scheduleAI() {
@@ -298,8 +385,8 @@ class GameUI {
       this.motion.progress = Math.min(1, Math.max(0, (this.now() - this.motion.start) / MOVE_MS));
       if (this.motion.progress < 1) { this.render(); this.nextFrame(frame); return; }
       this.motion = null; this.locked = false; this.phase = 'idle';
-      if (this.state.winner !== null) this.finish();
-      else { this.render(); this.scheduleAI(); }
+      if (this.state.winner !== null) { this.turnDeadline = null; this.finish(); }
+      else { this.beginTurnClock(); this.render(); this.scheduleAI(); }
     };
     this.nextFrame(frame);
   }
@@ -323,6 +410,7 @@ class GameUI {
 
   openModal(modal) {
     if (this.destroyed || this.hidden) return;
+    this.pauseTurnClock();
     this.invalidate(); this.modal = typeof modal === 'string' ? { type: modal, page: 0 } : modal; this.render();
   }
 
@@ -330,11 +418,13 @@ class GameUI {
     if (this.destroyed) return;
     this.modal = null; this.render();
     if (this.state && this.screen === 'game' && this.state.winner !== null) this.finish();
-    else this.scheduleAI();
+    else { this.scheduleAI(); this.resumeTurnClock(); }
   }
 
   goHome() {
     if (this.onlineMode) { this.leaveOnline(); return; }
+    this.turnDeadline = null; this.turnPaused = null;
+    this.turnClockToken = (this.turnClockToken || 0) + 1;
     this.invalidate();
     // Leaving the board drops the in-progress match. A finished game only clears its save.
     if (this.state && this.state.winner === null) this.clearSave();
@@ -349,6 +439,7 @@ class GameUI {
     // A native album picker can itself hide the game. Preserve only its exact pending
     // owner; explicit cancel/leave/destroy still retire the operation and generation.
     if (!this.hasPendingAlbumOperation()) this.cancelOnlineAvatar();
+    this.pauseTurnClock();
     this.online.setHidden(true); this.invalidate(); this.save();
     if (this.state && this.state.winner !== null) { this.recordResult(); if (this.statsDirty) this.persistStats(); }
   }
@@ -357,7 +448,7 @@ class GameUI {
     if (this.destroyed || !this.hidden) return;
     this.hidden = false; this.online.setHidden(false);
     if (this.screen === 'game' && this.state && this.state.winner !== null && !this.modal) this.finish();
-    else { this.render(); this.scheduleAI(); }
+    else { this.render(); this.scheduleAI(); this.resumeTurnClock(); }
   }
 
   destroy() {
@@ -665,8 +756,10 @@ class GameUI {
       this.panel(bx, y, half, 58, active ? '#2c4b34' : '#123127', active ? GOLD : '#34513e', 12);
       if (this.onlineMode) this.onlineAvatar(this.online.room.players[player] && this.online.room.players[player].profile, this.state.avatars[player], bx + 5, y + 7, 43);
       else this.avatar(this.state.avatars[player], bx + 5, y + 7, 43);
+      const seconds = active ? this.turnSecondsLeft() : null;
       this.text(this.playerName(player), bx + 56, y + 19, 14, active ? GOLD : INK, 'left', 'bold');
-      this.text(active ? '当前回合' : this.state.winner === player ? '获胜' : '等待', bx + 56, y + 40, 12, MUTED);
+      this.text(seconds == null ? (active ? '当前回合' : this.state.winner === player ? '获胜' : '等待') : '剩余 ' + seconds + ' 秒',
+        bx + 56, y + 40, 12, seconds != null && seconds <= 5 ? GOLD : MUTED);
     });
     y += 73;
     const status = this.onlineMode && this.online.error ? this.online.error : this.onlineMode && this.online.busy ? '正在确认服务端状态…' : this.state.winner !== null ? '本局结束 · 拿最后一颗的人输' : this.phase === 'thinking' ? '电脑正在思考…' :

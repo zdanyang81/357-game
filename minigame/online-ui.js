@@ -28,9 +28,20 @@ module.exports = {
       this.state = room.game; this.screen = 'game';
       if (changed) this.selected = null;
       if (room.status === 'finished' && !this.modal) this.modal = { type: 'online-result' };
+      const deadline = typeof room.turnDeadline === 'number' ? room.turnDeadline : null;
+      if (room.status === 'playing' && deadline !== this.seenTurnDeadline) {
+        this.seenTurnDeadline = deadline;
+        this.armTurnClock();
+      }
+      if (room.status !== 'playing') {
+        this.seenTurnDeadline = null;
+        this.turnClockToken = (this.turnClockToken || 0) + 1;
+      }
     } else {
       // Retire the result view before its authoritative game state disappears.
       if (this.modal && this.modal.type === 'online-result') this.modal = null;
+      this.seenTurnDeadline = null;
+      this.turnClockToken = (this.turnClockToken || 0) + 1;
       this.state = null; this.screen = 'online';
     }
     this.render();

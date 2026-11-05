@@ -78,10 +78,13 @@ function normalizeRoom(room) {
     return { seat, profile: player.profile };
   }) : room.players;
   const waiting = room.status === 'waiting';
+  const rawDeadline = room.turnDeadline;
+  const parsedDeadline = rawDeadline == null || rawDeadline === '' ? null : asNumber(rawDeadline, NaN);
   return {
     code: typeof room.code === 'string' ? normalizeCode(room.code) : room.code,
     revision: room.revision == null || room.revision === '' ? (waiting ? 0 : room.revision) : asNumber(room.revision, room.revision),
     status: room.status, players, expiresAt: room.expiresAt,
+    turnDeadline: typeof parsedDeadline === 'number' && Number.isFinite(parsedDeadline) ? parsedDeadline : null,
     game: waiting || room.game == null || room.game === '' ? null : acceptGame(room.game)
   };
 }
@@ -101,6 +104,7 @@ function validRoom(room) {
   return !!value && CODE.test(value.code) && Number.isSafeInteger(value.revision) && value.revision >= 0 &&
     ['waiting', 'playing', 'finished'].includes(value.status) && Array.isArray(value.players) &&
     value.players.length >= 1 && value.players.length <= 2 && value.players.every((p, i) => p && p.seat === i && p.profile) &&
+    (value.turnDeadline == null || Number.isFinite(value.turnDeadline)) &&
     (value.status === 'waiting' ? value.game == null : engine.validateState(value.game) && value.game.mode === 'pvp' &&
       (value.status === 'finished') === (value.game.winner !== null));
 }
