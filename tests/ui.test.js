@@ -88,15 +88,26 @@ function harness(options = {}) {
       const x = (platform.width - total) / 2 + position * (size + 5) + size / 2;
       this.emit('touch', { x, y: strip.y + strip.h / 2 });
     },
+    clockTimers() {
+      return [...timers.entries()].filter(([, timer]) => timer.fn && timer.fn.turnClock);
+    },
     step() {
-      const next = [...timers.entries()].sort((a, b) => a[1].due - b[1].due || a[0] - b[0])[0];
+      const next = [...timers.entries()].filter(([, timer]) => !(timer.fn && timer.fn.turnClock))
+        .sort((a, b) => a[1].due - b[1].due || a[0] - b[0])[0];
       if (!next) return false;
       timers.delete(next[0]); clock = next[1].due; next[1].fn(); return true;
     },
     flush(limit = 200) {
       let steps = 0;
-      while (timers.size && steps++ < limit) this.step();
-      assert.equal(timers.size, 0, 'timer loop did not settle');
+      while ([...timers.values()].some(timer => !(timer.fn && timer.fn.turnClock)) && steps++ < limit) this.step();
+      assert.equal([...timers.values()].filter(timer => !(timer.fn && timer.fn.turnClock)).length, 0, 'timer loop did not settle');
+    },
+    expireTurn() {
+      assert.equal(typeof ui.turnDeadline, 'number');
+      clock = ui.turnDeadline;
+      const next = this.clockTimers().sort((a, b) => a[1].due - b[1].due || a[0] - b[0])[0];
+      assert.ok(next, 'no turn clock');
+      timers.delete(next[0]); next[1].fn();
     },
     toPhase(phase) {
       for (let tries = 0; ui.phase !== phase && tries < 30; tries++) assert.ok(this.step());
@@ -139,7 +150,8 @@ test('existing opener compatibility restores legacy local saves with aiFirst set
     const h = harness({ data: { [KEYS.save]: { version: 1, id: 'legacy-local', state, assisted: false } } });
     t.after(() => h.ui.destroy());
     assert.equal(h.ui.modal.type, 'restore'); h.touch('modal-action-1');
-    assert.deepEqual(h.ui.state, state); assert.equal(h.ui.timers.size, 0);
+    assert.deepEqual(h.ui.state, state);
+    assert.equal([...h.timers.values()].filter(timer => !(timer.fn && timer.fn.turnClock)).length, 0);
     h.ui.select(1, 1); h.ui.confirmMove(); h.flush();
     assert.ok(engine.validateState(h.ui.state));
   }
@@ -257,7 +269,7 @@ test('rapid confirm taps cannot double-commit during animation or AI thinking', 
   assert.equal(h.ui.state.history.length, 1); assert.equal(h.ui.phase, 'animating');
   h.toPhase('thinking');
   for (let i = 0; i < 20; i++) { h.ui.scheduleAI(); h.touch('confirm'); h.die(2, 3); }
-  assert.equal(h.timers.size, 1); assert.equal(h.ui.state.history.length, 1);
+  assert.equal([...h.timers.values()].filter(timer => !(timer.fn && timer.fn.turnClock)).length, 1); assert.equal(h.ui.state.history.length, 1);
   h.flush(); assert.equal(h.ui.state.history.length, 2); assert.equal(h.ui.state.currentPlayer, 0);
   assert.equal(h.ui.locked, false); assert.equal(h.ui.selected, null);
 });
@@ -491,7 +503,7 @@ test('home and game share fixed single-page rules without changing a selected po
     return h.calls.slice(dim + 1).filter(c => c.method === 'fillText').map(c => c.args[0]).join('');
   };
   const homeRules = readRules();
-  for (const phrase of ['双方轮流', '每回合只能从一排拿至少一颗', '拿最后一颗的人输', '左边的一方从左往右拿', '右边的一方从右往左拿', '确认拿取 / 取消'])
+  for (const phrase of ['双方轮流', '每回合只能从一排拿至少一颗', '拿最后一颗的人输', '左边的一方从左往右拿', '右边的一方从右往左拿', '确认拿取 / 取消', '每回合30秒', '超时自动取第一排有骰子的一颗'])
     assert.ok(homeRules.includes(phrase), phrase);
   h.touch('modal-close'); pvp(h); h.die(1, 3);
   const state = copy(h.ui.state), selected = copy(h.ui.selected), saved = copy(h.data[KEYS.save]);
@@ -501,7 +513,8 @@ test('home and game share fixed single-page rules without changing a selected po
   assert.equal(readRules(), homeRules); h.ui.select(0, 1); h.touch('modal-close');
   assert.deepEqual(h.ui.state, state); assert.deepEqual(h.ui.selected, selected);
   assert.deepEqual(h.data[KEYS.save], saved); assert.equal(h.ui.gameId, id);
-  assert.equal(h.ui.assisted, false); assert.equal(h.ui.stats.results.length, 0); assert.equal(h.timers.size, 0);
+  assert.equal(h.ui.assisted, false); assert.equal(h.ui.stats.results.length, 0);
+  assert.equal([...h.timers.values()].filter(timer => !(timer.fn && timer.fn.turnClock)).length, 0);
   h.touch('confirm'); h.flush(); assert.deepEqual(h.ui.state.piles, [3, 2, 7]);
 });
 
@@ -552,7 +565,7 @@ test('actual move animation highlights, rises and fades frame by frame; not only
     return originalDice.apply(this, args);
   };
   h.ui.confirmMove(); assert.equal(h.ui.phase, 'animating'); assert.equal(h.ui.state.history.length, 1);
-  assert.ok([...h.timers.values()].every(timer => timer.due <= 16), 'frames are scheduled at display rate');
+  assert.ok([...h.timers.values()].filter(timer => !(timer.fn && timer.fn.turnClock)).every(timer => timer.due <= 16), 'frames are scheduled at display rate');
   h.flush(); h.ui.dice = originalDice;
   assert.equal(h.ui.motion, null); assert.equal(h.ui.phase, 'idle'); assert.equal(h.ui.state.history.length, 1);
   const progress = [...new Set(overlays.map(o => o.progress))];
@@ -660,23 +673,26 @@ test('destroy cancels timers, unsubscribes callbacks, and rejects already queued
 test('online lobby is bounded on narrow screen; invites only prefill and never autojoin', t => {
   const h = harness({ safeTop: 84 }); t.after(() => h.ui.destroy());
   let requests = 0; h.platform.request = () => { requests++; throw new Error('unexpected'); };
-  h.emit('show', { query: { room: 'ABCDEFG2', apiBase: 'https://evil', token: 'evil' } });
-  assert.equal(h.ui.screen, 'home'); assert.equal(h.ui.onlineCode, 'ABCDEFG2'); assert.equal(requests, 0);
+  h.emit('show', { query: { room: '2468', apiBase: 'https://evil', token: 'evil' } });
+  assert.equal(h.ui.screen, 'home'); assert.equal(h.ui.onlineCode, '2468'); assert.equal(requests, 0);
   h.touch('online'); withinSafeArea(h, 'online lobby');
   assert.equal(h.ui.online.enabled, false);
   assert.equal(h.ui.hitBoxes.find(b => b.id === 'online-create').disabled, true);
-  h.emit('show', { query: { room: 'BCDEFGH2' } }); assert.equal(h.ui.onlineCode, 'BCDEFGH2'); assert.equal(requests, 0);
+  h.emit('show', { query: { room: '1357' } }); assert.equal(h.ui.onlineCode, '1357'); assert.equal(requests, 0);
   h.ui.online.enabled = true;
-  h.emit('show', { query: { room: 'ABCDEF89' } }); assert.equal(h.ui.onlineCode, 'ABCDEF89');
+  h.emit('show', { query: { room: '8024' } }); assert.equal(h.ui.onlineCode, '8024');
+  h.touch('online-code'); withinSafeArea(h, 'room code pad');
   assert.equal(h.ui.hitBoxes.find(b => b.id === 'online-join').disabled, false);
-  h.ui.onlineCode = 'ABCDEFIO'; h.ui.render();
+  for (const digit of '0123456789') assert.ok(h.ui.hitBoxes.some(box => box.id === 'code-key-' + digit), 'missing number key ' + digit);
+  assert.ok(h.calls.some(call => call.method === 'fillText' && call.args[0] === '8'), 'room digits are visible text, not blank keys');
+  h.ui.onlineCode = '12ab'; h.ui.render();
   assert.equal(h.ui.hitBoxes.find(b => b.id === 'online-join').disabled, true);
 });
 
 test('failed leave is visible above the confirmation modal and keeps a read-only recovery path', async t => {
   const h = harness(); t.after(() => h.ui.destroy()); h.touch('online');
   const game = engine.createGame({ mode: 'pvp' });
-  h.ui.online.room = { code: 'ABCDEFG2', revision: 1, status: 'playing', game,
+  h.ui.online.room = { code: '2468', revision: 1, status: 'playing', game,
     players: [0, 1].map(seat => ({ seat, profile: { avatar: { type: 'preset', index: 0 } } })) };
   h.ui.online.token = 'test-token-000000000000'; h.ui.online.seat = 0; h.ui.onlineChanged();
   h.ui.openModal('leave');
@@ -695,7 +711,7 @@ for (const unknown of [false, true]) test('real terminal online leave retires re
   const h = harness(); t.after(() => h.ui.destroy()); h.touch('online');
   let game = engine.createGame({ mode: 'pvp' });
   while (game.winner === null) game = engine.move(game, game.piles.findIndex(n => n > 0), 1);
-  const room = { code: 'ABCDEFG2', revision: game.history.length, status: 'finished', game,
+  const room = { code: '2468', revision: game.history.length, status: 'finished', game,
     players: [0, 1].map(seat => ({ seat, profile: { avatar: { type: 'preset', index: 0 } } })) };
   const requests = [];
   h.ui.online.enabled = true; h.ui.online.base = 'https://rooms.example.test';
@@ -737,18 +753,18 @@ test('Canvas consent does not wait for a native confirmation promise that never 
 
 test('Canvas room consent cancels without requests and accepts a frozen join/profile snapshot once', async t => {
   const h = harness({ safeTop: 84 }); t.after(() => h.ui.destroy()); h.touch('online');
-  h.ui.onlineCode = 'ABCDEF89'; h.ui.online.enabled = true;
+  h.ui.onlineCode = '8024'; h.ui.online.enabled = true;
   const calls = []; let complete;
   h.ui.online.enter = (code, profile) => { calls.push({ code, profile }); return new Promise(done => { complete = done; }); };
   h.ui.enterOnline(true); const cancelled = h.ui.modal;
   h.touch('modal-action-0'); await h.ui.confirmOnlineConsent(cancelled); assert.equal(calls.length, 0);
   h.ui.enterOnline(true); const consent = h.ui.modal;
-  const expected = copy(h.ui.onlineProfile); h.ui.onlineProfile.avatar.index = 4; h.ui.onlineCode = 'BCDEFG89';
+  const expected = copy(h.ui.onlineProfile); h.ui.onlineProfile.avatar.index = 4; h.ui.onlineCode = '9753';
   withinSafeArea(h, 'join consent');
   assert.equal(consent.pages, 1, 'critical consent text is visible on one page');
   const pending = h.ui.confirmOnlineConsent(consent);
   await h.ui.confirmOnlineConsent(consent); h.ui.enterOnline(false);
-  assert.equal(calls.length, 1); assert.deepEqual(calls[0], { code: 'ABCDEF89', profile: expected });
+  assert.equal(calls.length, 1); assert.deepEqual(calls[0], { code: '8024', profile: expected });
   complete(true); await pending; assert.equal(h.ui.profileBusy, false);
 });
 
@@ -785,11 +801,11 @@ test('random room creation never requires or submits the code field reserved for
   const submitted = [];
   h.platform.confirmProfile = () => { assert.fail('room entry no longer uses native confirmation'); };
   h.ui.online.enter = async code => { submitted.push(code); return true; };
-  for (const joinCode of ['', 'ABCDEF89', 'INVALID1']) {
+  for (const joinCode of ['', '8024', '12a']) {
     h.ui.onlineCode = joinCode; h.ui.render();
     assert.equal(h.ui.hitBoxes.find(b => b.id === 'online-create').disabled, false);
     h.ui.enterOnline(false); assert.equal(h.ui.modal.type, 'online-consent');
-    assert.equal(submitted.length, ['', 'ABCDEF89', 'INVALID1'].indexOf(joinCode));
+    assert.equal(submitted.length, ['', '8024', '12a'].indexOf(joinCode));
     await h.ui.confirmOnlineConsent(h.ui.modal);
   }
   assert.deepEqual(submitted, ['', '', '']);
@@ -798,7 +814,7 @@ test('random room creation never requires or submits the code field reserved for
 test('network board only accepts own turn; no local AI, optimistic move, save or result ledger', async t => {
   const h = harness(); t.after(() => h.ui.destroy()); h.touch('online');
   const profile = { avatar: { type: 'preset', index: 0 } };
-  h.ui.online.room = { code: 'ABCDEFG2', revision: 1, status: 'playing', players: [{ seat: 0, profile }, { seat: 1, profile }], game: engine.createGame({ mode: 'pvp' }) };
+  h.ui.online.room = { code: '2468', revision: 1, status: 'playing', players: [{ seat: 0, profile }, { seat: 1, profile }], game: engine.createGame({ mode: 'pvp' }) };
   h.ui.online.token = 'session-token'; h.ui.online.seat = 1; h.ui.onlineChanged();
   assert.equal(h.ui.canPlay(), false); h.ui.scheduleAI(); assert.equal(h.timers.size, 0);
   h.ui.online.seat = 0; assert.equal(h.ui.canPlay(), true);
@@ -904,4 +920,78 @@ test('avatar refusal and late choice preserve playable preset without sending an
   resolve({ avatar: { type: 'image', data: 'data:image/png;base64,aGVsbG8=' } }); await pending;
   assert.equal(h.ui.onlineProfile.avatar.type, 'preset');
   h.emit('show'); assert.equal(h.ui.profileBusy, false); assert.equal(h.ui.online.token, '');
+});
+
+test('a human turn lasts 30 seconds, then takes one die and gives the next player a fresh turn', t => {
+  const h = harness(); t.after(() => h.ui.destroy());
+  pvp(h);
+  assert.equal(h.ui.turnSecondsLeft(), 30);
+  h.ui.select(2, 4);
+  h.expireTurn();
+  assert.equal(h.ui.toast, '超时，已自动取 1 颗');
+  assert.equal(h.ui.selected, null);
+  h.flush();
+  assert.deepEqual(h.ui.state.piles, [2, 5, 7]);
+  assert.equal(h.ui.state.history.length, 1);
+  assert.equal(h.ui.state.history[0].count, 1);
+  assert.equal(h.ui.state.currentPlayer, 1);
+  assert.equal(h.ui.turnSecondsLeft(), 30);
+});
+
+test('avatars are chosen on the home screen and are not editable during a match', t => {
+  const h = harness(); t.after(() => h.ui.destroy());
+  assert.equal(h.ui.screen, 'home');
+  assert.ok(h.ui.hitBoxes.some(b => b.id === 'avatar-0'));
+  h.touch('avatar-0');
+  assert.equal(h.ui.modal.type, 'avatars');
+  h.touch('choose-avatar-1');
+  assert.deepEqual(h.ui.settings.avatars, [1, 3]);
+  assert.equal(h.ui.screen, 'home');
+  h.touch('start');
+  assert.equal(h.ui.screen, 'game');
+  assert.equal(h.ui.state.avatars[0], 1);
+  assert.ok(h.ui.hitBoxes.every(b => !b.id.startsWith('avatar') && !b.id.startsWith('choose-avatar')));
+});
+
+test('online clock rearms after an early expiry refresh with the same revision', t => {
+  const h = harness(); t.after(() => h.ui.destroy());
+  let now = 0, refreshes = 0;
+  h.ui.online.relativeNow = () => now;
+  h.ui.openOnline();
+  const profile = { avatar: { type: 'preset', index: 0 } };
+  const snapshot = { code: '2468', revision: 1, status: 'playing',
+    players: [{ seat: 0, profile }, { seat: 1, profile }], game: engine.createGame({ mode: 'pvp' }),
+    turnDeadline: 130000, serverNow: 100000 };
+  h.ui.online.accept(snapshot); h.ui.onlineChanged();
+  h.ui.online.refresh = () => { refreshes++; };
+  assert.equal(h.ui.turnSecondsLeft(), 30);
+  now = 30000;
+  let tick = h.clockTimers().at(-1); h.timers.delete(tick[0]); tick[1].fn();
+  assert.equal(refreshes, 1); assert.equal(h.ui.turnSecondsLeft(), 0);
+  h.ui.online.accept({ ...snapshot, serverNow: 129500 }); h.ui.onlineChanged();
+  assert.equal(h.ui.turnSecondsLeft(), 1);
+  now += 500;
+  tick = h.clockTimers().at(-1); h.timers.delete(tick[0]); tick[1].fn();
+  assert.equal(refreshes, 2, 'new calibration re-arms expiry rather than getting stuck');
+  assert.equal(h.ui.state.history.length, 0, 'client never makes timeout moves');
+});
+
+test('online defaults to home avatar without overwriting an explicit online selection', t => {
+  const h = harness(); t.after(() => h.ui.destroy());
+  h.ui.settings.avatars[0] = 2; h.ui.openOnline();
+  assert.equal(h.ui.onlineProfile.avatar.index, 2);
+  h.touch('online-preset'); assert.equal(h.ui.onlineProfile.avatar.index, 3);
+  h.ui.settings.avatars[0] = 4; h.ui.openOnline();
+  assert.equal(h.ui.onlineProfile.avatar.index, 3);
+});
+
+test('online recovery displays checking status without hiding an existing error', t => {
+  const h = harness(); t.after(() => h.ui.destroy()); h.ui.openOnline();
+  const profile = { avatar: { type: 'preset', index: 0 } };
+  h.ui.online.accept({ code: '2468', revision: 1, status: 'playing',
+    players: [{ seat: 0, profile }, { seat: 1, profile }], game: engine.createGame({ mode: 'pvp' }) });
+  h.ui.online.recoveryPending = true; h.calls.length = 0; h.ui.onlineChanged();
+  assert.ok(h.calls.some(c => c.method === 'fillText' && c.args[0] === '正在确认服务端状态…'));
+  h.ui.online.error = '核对失败'; h.calls.length = 0; h.ui.render();
+  assert.ok(h.calls.some(c => c.method === 'fillText' && c.args[0] === '核对失败'));
 });

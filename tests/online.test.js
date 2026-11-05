@@ -4,7 +4,7 @@ const assert = require('node:assert/strict');
 const engine = require('../minigame/core/engine');
 const { OnlineSession, inviteCode, CODE } = require('../minigame/online');
 const { createRoomService, CODE: SERVER_CODE } = require('../server/rooms');
-const code = 'ABCDEFG2', token = 'test-token-000000000000000000';
+const code = '2468', token = 'test-token-000000000000000000';
 const preset = { avatar: { type: 'preset', index: 0 } };
 const room = (revision = 1, game = engine.createGame({ mode: 'pvp' })) => ({ code, revision, status: game.winner === null ? 'playing' : 'finished', players: [{ seat: 0, profile: preset }, { seat: 1, profile: preset }], game });
 function setup() {
@@ -18,19 +18,23 @@ async function entered(h) {
   const pending = h.s.enter(code, preset);
   h.respond({ roomCode: code, token, seat: 0, room: room() }); await pending;
 }
-test('all code validators match server alphabet including 8/9 and excluding I/O/0/1', () => {
-  for (const char of 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789/_-') {
-    const value = 'ABCDEF' + char + char;
+test('room codes are exactly 4 digits and match the server', () => {
+  for (let n = 0; n < 10000; n += 137) {
+    const value = String(n).padStart(4, '0');
+    assert.equal(CODE.test(value), true, value);
     assert.equal(CODE.test(value), SERVER_CODE.test(value), value);
-    assert.equal(inviteCode({ room: value }), SERVER_CODE.test(value) ? value : '', value);
+    assert.equal(inviteCode({ room: value }), value);
   }
-  assert.equal(inviteCode({ room: ' abcdef89 ' }), 'ABCDEF89');
+  for (const value of ['12345', '123', '12a4', 'ABCDEFIO', '']) assert.equal(inviteCode({ room: value }), '');
+  assert.equal(inviteCode({ room: 'abcdefgh' }), 'ABCDEFGH');
+  assert.equal(inviteCode({ room: '12 48' }), '1248');
+  assert.equal(inviteCode({ room: ' ０２４６ ' }), '0246');
+  assert.equal(inviteCode({ room: '房间码：1357' }), '1357');
 });
 
-test('real room service responses with 8/9 flow through two OnlineSessions end to end', async t => {
-  const crypto = require('node:crypto'), randomBytes = crypto.randomBytes;
-  // Force a real service-generated invitation containing the previously rejected digits.
-  t.mock.method(crypto, 'randomBytes', size => size === 8 ? Buffer.from([0, 1, 2, 3, 4, 5, 30, 31]) : randomBytes(size));
+test('real room service responses flow through two OnlineSessions end to end', async t => {
+  const crypto = require('node:crypto');
+  t.mock.method(crypto, 'randomInt', () => 2589);
   const service = createRoomService({ randomFirst: () => 0 });
   const calls = [];
   const platform = {
@@ -53,7 +57,7 @@ test('real room service responses with 8/9 flow through two OnlineSessions end t
   const host = new OnlineSession(platform, 'https://test.invalid'), guest = new OnlineSession(platform, 'https://test.invalid');
   t.after(() => { host.destroy(); guest.destroy(); });
   assert.equal(await host.enter('', preset), true);
-  assert.equal(host.room.code, 'ABCDEF89'); assert.equal(host.creationUnknown, false);
+  assert.equal(host.room.code, '2589'); assert.equal(host.creationUnknown, false);
   assert.equal(await guest.enter(host.room.code, preset), true);
   assert.equal(guest.seat, 1); await host.refresh(); assert.equal(host.canMove(), true);
   await host.move(0, 1); await guest.refresh();
@@ -64,9 +68,104 @@ test('real room service responses with 8/9 flow through two OnlineSessions end t
   assert.ok(calls.every(call => credentials.every(secret => !call.url.includes(secret))));
 });
 
+// The session requires an HTTPS base in production. This adapter permits only that
+// fixed synthetic origin and sends its requests to an ephemeral loopback HTTP listener.
+async function timedHTTPRoom(t) {
+  const http = require('node:http');
+  const { createHTTPServer } = require('../server/http');
+  let time = 1000000;
+  const now = () => time;
+  const server = createHTTPServer({ now, service: createRoomService({ now, turnMs: 30000, randomFirst: () => 0 }) });
+  await new Promise((resolve, reject) => { server.once('error', reject); server.listen(0, '127.0.0.1', resolve); });
+  t.after(() => new Promise((resolve, reject) => server.close(error => error ? reject(error) : resolve())));
+  const port = server.address().port;
+  const sessions = [];
+  t.after(() => { for (const session of sessions) session.destroy(); });
+  function client(wallOffset, relativeOffset) {
+    const timers = new Map(); let timerId = 0;
+    const platform = {
+      now: () => time + wallOffset, monotonicNow: () => time + relativeOffset,
+      setTimeout(fn) { timers.set(++timerId, fn); return timerId; },
+      clearTimeout(id) { timers.delete(id); },
+      request(options) {
+        const url = new URL(options.url);
+        assert.equal(url.origin, 'https://room.invalid');
+        return new Promise((resolve, reject) => {
+          const request = http.request({ hostname: '127.0.0.1', port, path: url.pathname,
+            method: options.method, headers: options.header, agent: false }, response => {
+            const chunks = [];
+            response.on('data', chunk => chunks.push(chunk));
+            response.on('error', reject);
+            response.on('end', () => {
+              try { resolve({ statusCode: response.statusCode, data: JSON.parse(Buffer.concat(chunks).toString()) }); }
+              catch (error) { reject(error); }
+            });
+          });
+          request.on('error', reject);
+          if (options.data !== undefined) request.write(JSON.stringify(options.data));
+          request.end();
+        });
+      }
+    };
+    const session = new OnlineSession(platform, 'https://room.invalid');
+    sessions.push(session);
+    return session;
+  }
+  return { client, advance(ms) { time += ms; } };
+}
+
+test('loopback HTTP sessions share countdown and accept a move before deadline', async t => {
+  const h = await timedHTTPRoom(t);
+  const host = h.client(900000000, 12000), guest = h.client(-700000000, 430000);
+  assert.equal(await host.enter('', preset), true);
+  assert.equal(await guest.enter(host.room.code, preset), true);
+  await host.refresh();
+  assert.equal(host.remainingTurnMs(), 30000);
+  assert.equal(guest.remainingTurnMs(), 30000);
+  h.advance(29999);
+  assert.equal(host.remainingTurnMs(), 1);
+  assert.equal(guest.remainingTurnMs(), 1);
+  assert.equal(host.canMove(), true);
+  const before = host.room.game;
+  await host.move(0, 1);
+  assert.deepEqual(host.room.game, engine.move(before, 0, 1));
+  assert.equal(host.room.revision, 2);
+  await guest.refresh();
+  assert.deepEqual(guest.room.game, host.room.game);
+  assert.equal(host.remainingTurnMs(), 30000);
+  assert.equal(guest.remainingTurnMs(), 30000);
+  assert.equal(guest.canMove(), true);
+});
+
+test('loopback HTTP timeout advances authoritative game and synchronizes both sessions', async t => {
+  const h = await timedHTTPRoom(t);
+  const host = h.client(-400000000, 7000), guest = h.client(800000000, 900000);
+  assert.equal(await host.enter('', preset), true);
+  assert.equal(await guest.enter(host.room.code, preset), true);
+  await host.refresh();
+  const before = host.room.game;
+  assert.equal(host.remainingTurnMs(), 30000);
+  assert.equal(guest.remainingTurnMs(), 30000);
+  h.advance(30001);
+  assert.equal(host.remainingTurnMs(), 0);
+  assert.equal(guest.remainingTurnMs(), 0);
+  // A read through the HTTP handler triggers server-side timeout enforcement.
+  await guest.refresh();
+  assert.equal(guest.room.revision, 2);
+  assert.deepEqual(guest.room.game, engine.move(before, 0, 1));
+  assert.equal(guest.remainingTurnMs(), 29999);
+  await host.refresh();
+  assert.deepEqual(host.room.game, guest.room.game);
+  assert.equal(host.room.revision, guest.room.revision);
+  assert.equal(host.remainingTurnMs(), 29999);
+  assert.equal(host.canMove(), false);
+  assert.equal(guest.canMove(), true);
+});
+
 test('invitations validate only room code; never accept external endpoint/token', () => {
-  assert.equal(inviteCode({ room: ' abcdefg2 ', apiBase: 'https://evil', token }), code);
-  for (const value of ['12345678', 'ABCD/EFG', '', null, 123]) assert.equal(inviteCode({ room: value }), '');
+  assert.equal(inviteCode({ room: ' 2468 ', apiBase: 'https://evil', token }), code);
+  for (const value of ['12345678', '12a4', '', null, 123, 'ABCDEFIO', '13800138000']) assert.equal(inviteCode({ room: value }), '');
+  assert.equal(inviteCode({ room: 'ABCDEFG2', apiBase: 'https://evil', token }), 'ABCDEFG2');
 });
 test('empty/non-HTTPS base disables network without touching request', async () => {
   for (const base of ['', 'http://example.test', 'javascript:evil']) {
@@ -193,4 +292,223 @@ test('finished-room unknown leave keeps polling through GET failure, pauses hidd
 test('out-of-turn seat cannot send any move', async () => {
   const h = setup(); await entered(h); h.s.seat = 1; await h.s.move(0, 1);
   assert.equal(h.calls.length, 1); h.s.destroy();
+});
+
+test('WeChat text responses that omit null, false, empty history and seat 0 still enter', async () => {
+  const h = setup();
+  const created = h.s.enter('', preset);
+  h.respond(JSON.stringify({ roomCode: '0246', token, room: { code: '0246', status: 'waiting', players: [{ profile: preset }] } }));
+  assert.equal(await created, true);
+  assert.equal(h.s.seat, 0); assert.equal(h.s.room.game, null); assert.equal(h.s.room.revision, 0);
+  h.s.destroy();
+  const guest = setup();
+  const game = engine.createGame({ mode: 'pvp', aiFirst: false });
+  delete game.winner; delete game.aiFirst; delete game.history;
+  game.currentPlayer = '0'; game.piles = game.piles.map(String);
+  const joined = guest.s.enter('1357', preset);
+  guest.queue.shift().resolve({ data: JSON.stringify({ roomCode: '1357', token, seat: '1', room: {
+    code: '1357', revision: '1', status: 'playing',
+    players: [{ profile: preset }, { seat: '1', profile: preset }], game } }) });
+  assert.equal(await joined, true);
+  assert.equal(guest.s.seat, 1); assert.equal(guest.s.room.game.winner, null);
+  assert.equal(guest.s.room.game.aiFirst, false); assert.deepEqual(guest.s.room.game.history, []);
+  assert.equal(guest.s.canMove(), false); guest.s.destroy();
+});
+
+test('current 8-character server codes still enter while 4-digit rooms are rolling out', async () => {
+  const h = setup();
+  const legacy = 'ABCDEFG2';
+  const pending = h.s.enter(legacy, preset);
+  h.respond({ roomCode: legacy, token, seat: 0, room: { code: legacy, revision: 0, status: 'waiting', players: [{ seat: 0, profile: preset }], game: null } });
+  assert.equal(await pending, true);
+  assert.equal(h.s.room.code, legacy); h.s.destroy();
+});
+
+test('a full room tells both phones to create a new code instead of rejoining', async () => {
+  const h = setup();
+  const pending = h.s.enter(code, preset);
+  h.respond({ error: { code: 'ROOM_FULL', message: '该房间已有两人或已开始' } }, 409);
+  await pending;
+  assert.match(h.s.error, /新建一个房间码/); assert.equal(h.s.creationUnknown, false);
+});
+
+test('server snapshot countdown uses relative time, RTT and rejects older snapshots', async () => {
+  const h = setup(); let relative = 1000, wall = 900000000;
+  h.s.relativeNow = () => relative; h.s.p.now = () => wall;
+  const enter = h.s.enter(code, preset);
+  relative += 400;
+  h.respond({ roomCode: code, token, seat: 0, room: { ...room(), turnDeadline: 130000, serverNow: 100000 } });
+  await enter;
+  assert.equal(h.s.remainingTurnMs(), 29800);
+  relative += 1000; wall -= 500000000;
+  assert.equal(h.s.remainingTurnMs(), 28800, 'wall-clock changes do not affect the timer');
+  const refresh = h.s.refresh(); relative += 200;
+  h.respond({ room: { ...room(), turnDeadline: 130000, serverNow: 102000 } }); await refresh;
+  assert.equal(h.s.remainingTurnMs(), 27900, 'same revision recalibrates');
+  const rollback = h.s.refresh();
+  h.respond({ room: { ...room(), turnDeadline: 130000, serverNow: 99000 } }); await rollback;
+  assert.equal(h.s.remainingTurnMs(), 31000, 'new response accepts server clock rollback');
+  const generation = h.s.clockGeneration;
+  h.s.accept({ ...room(0), turnDeadline: 180000, serverNow: 103000 });
+  assert.equal(h.s.clockGeneration, generation, 'older revision is ignored');
+  h.s.destroy();
+});
+
+test('old server without serverNow retains wall-clock compatibility and relative ticking', async () => {
+  const h = setup(); let relative = 10, wall = 5000;
+  h.s.relativeNow = () => relative; h.s.p.now = () => wall;
+  const enter = h.s.enter(code, preset);
+  h.respond({ roomCode: code, token, seat: 0, room: { ...room(), turnDeadline: 35000 } }); await enter;
+  assert.equal(h.s.remainingTurnMs(), 30000);
+  relative += 2000; wall += 3600000;
+  assert.equal(h.s.remainingTurnMs(), 28000);
+  h.s.destroy();
+});
+
+test('out of order requests use dispatch order only for equal revisions', async () => {
+  const h = setup(); await entered(h); h.s.relativeNow = () => 1000;
+  const old = h.s.request('GET', '/old', undefined, true);
+  const newer = h.s.request('GET', '/new', undefined, true);
+  const first = h.queue.shift(), second = h.queue.shift();
+  second.resolve({ statusCode: 200, data: { room: { ...room(), turnDeadline: 50000, serverNow: 30000 } } });
+  const newData = await newer; h.s.accept(newData.room, newData);
+  first.resolve({ statusCode: 200, data: { room: { ...room(), turnDeadline: 50000, serverNow: 10000 } } });
+  const oldData = await old; const generation = h.s.clockGeneration;
+  h.s.accept(oldData.room, oldData); assert.equal(h.s.clockGeneration, generation);
+  assert.equal(h.s.remainingTurnMs(), 20000);
+  h.s.accept({ ...oldData.room, revision: 2 }, oldData);
+  assert.equal(h.s.room.revision, 2, 'higher revision wins despite older dispatch');
+  h.s.destroy();
+});
+
+test('pre-move GET cannot resolve an unknown move or retire its recheck', async () => {
+  const h = setup(); await entered(h);
+  const staleRead = h.s.refresh(); const stale = h.queue.shift();
+  const move = h.s.move(0, 1); h.fail();
+  await Promise.resolve(); await Promise.resolve();
+  assert.equal(h.s.uncertain, true); assert.equal(h.s.reading, true);
+  assert.equal(h.calls.at(-1).method, 'GET');
+  stale.resolve({ statusCode: 200, data: { room: room() } }); await staleRead;
+  assert.equal(h.s.uncertain, true); assert.equal(h.s.reading, true); assert.equal(h.s.canMove(), false);
+  await h.s.move(0, 1);
+  assert.equal(h.calls.filter(c => c.url.endsWith('/moves')).length, 1);
+  h.respond({ room: room(2, engine.move(h.s.room.game, 0, 1)) }); await move;
+  assert.equal(h.s.uncertain, false); assert.equal(h.s.reading, false); assert.equal(h.s.room.revision, 2);
+  h.s.destroy();
+});
+
+test('hide retires in-flight GET and show immediately starts a fresh sample', async () => {
+  const h = setup(); await entered(h); let now = 0; h.s.relativeNow = () => now;
+  const old = h.s.refresh(), stale = h.queue.shift();
+  h.s.setHidden(true); now = 100000; h.s.setHidden(false);
+  assert.equal(h.s.reading, true); assert.equal(h.calls.length, 3);
+  stale.resolve({ statusCode: 200, data: { room: { ...room(), turnDeadline: 80000, serverNow: 50000 } } }); await old;
+  assert.equal(h.s.reading, true); assert.equal(h.s.clockSample, null);
+  now += 200; h.respond({ room: { ...room(), turnDeadline: 80000, serverNow: 50000 } });
+  await Promise.resolve(); await Promise.resolve();
+  assert.equal(h.s.reading, false); assert.equal(h.s.remainingTurnMs(), 29900);
+  h.s.destroy();
+});
+
+for (const returnHidden of [true, false]) test('move across background refreshes after authoritative response: hidden=' + returnHidden, async () => {
+  const h = setup(); await entered(h); let now = 0; h.s.relativeNow = () => now;
+  const game = engine.move(h.s.room.game, 0, 1);
+  const move = h.s.move(0, 1); h.s.setHidden(true); now = 120000;
+  if (!returnHidden) h.s.setHidden(false);
+  h.respond({ room: { ...room(2, game), turnDeadline: 130000, serverNow: 100000 } });
+  await Promise.resolve(); await Promise.resolve();
+  assert.equal(h.s.room.revision, 2); assert.equal(h.s.remainingTurnMs(), null);
+  if (returnHidden) { await move; assert.equal(h.calls.length, 2); h.s.setHidden(false); }
+  assert.equal(h.calls.at(-1).method, 'GET');
+  now += 200; h.respond({ room: { ...room(2, game), turnDeadline: 130000, serverNow: 100000 } });
+  if (!returnHidden) await move; else { await Promise.resolve(); await Promise.resolve(); }
+  assert.equal(h.s.remainingTurnMs(), 29900);
+  assert.equal(h.calls.filter(c => c.url.endsWith('/moves')).length, 1); h.s.destroy();
+});
+
+test('failed background move stays uncertain until visible recheck without resending', async () => {
+  const h = setup(); await entered(h);
+  const move = h.s.move(0, 1); h.s.setHidden(true); h.fail(); await move;
+  assert.equal(h.s.uncertain, true); assert.equal(h.calls.length, 2);
+  h.s.setHidden(false); assert.equal(h.calls.at(-1).method, 'GET');
+  assert.equal(h.s.canMove(), false);
+  h.respond({ room: room() }); await Promise.resolve(); await Promise.resolve();
+  assert.equal(h.s.uncertain, false);
+  assert.equal(h.calls.filter(c => c.url.endsWith('/moves')).length, 1); h.s.destroy();
+});
+
+test('join across background preserves credentials and rechecks without polluted RTT', async () => {
+  const h = setup(); let now = 0; h.s.relativeNow = () => now;
+  const enter = h.s.enter(code, preset); h.s.setHidden(true); now = 120000; h.s.setHidden(false);
+  h.respond({ roomCode: code, token, seat: 0, room: { ...room(), turnDeadline: 130000, serverNow: 100000 } });
+  assert.equal(await enter, true); assert.equal(h.s.token, token); assert.equal(h.s.remainingTurnMs(), null);
+  assert.equal(h.calls.at(-1).method, 'GET'); now += 100;
+  h.respond({ room: { ...room(), turnDeadline: 130000, serverNow: 100000 } });
+  await Promise.resolve(); await Promise.resolve(); assert.equal(h.s.remainingTurnMs(), 29950); h.s.destroy();
+});
+
+test('background leave success does not rejoin or refresh; unknown leave rechecks once visible', async () => {
+  const success = setup(); await entered(success);
+  const leaving = success.s.leave(); success.s.setHidden(true); success.s.setHidden(false);
+  success.respond({}); assert.equal(await leaving, true); assert.equal(success.s.token, '');
+  assert.equal(success.calls.length, 2); success.s.destroy();
+  const failed = setup(); await entered(failed);
+  const unknown = failed.s.leave(); failed.s.setHidden(true); failed.s.setHidden(false); failed.fail();
+  assert.equal(await unknown, false); assert.equal(failed.s.uncertain, true);
+  assert.equal(failed.calls.at(-1).method, 'GET');
+  assert.equal(failed.calls.filter(c => c.url.endsWith('/leave')).length, 1);
+  failed.respond({ room: room() }); await Promise.resolve(); await Promise.resolve();
+  assert.equal(failed.s.uncertain, false); failed.s.destroy();
+});
+
+test('background recovery locks moves through notifications, stale reads and failed reads', async () => {
+  const h = setup(); await entered(h); const notifications = [];
+  h.s.changed = () => notifications.push(h.s.canMove());
+  h.s.setHidden(true); h.s.setHidden(false);
+  assert.equal(h.s.recoveryPending, true); assert.equal(h.s.canMove(), false);
+  const stale = h.queue.shift();
+  h.s.setHidden(true); h.s.setHidden(false);
+  stale.resolve({ statusCode: 200, data: { room: room() } });
+  await Promise.resolve(); await Promise.resolve();
+  assert.equal(h.s.reading, true); assert.equal(h.s.canMove(), false);
+  h.fail(); await Promise.resolve(); await Promise.resolve();
+  assert.equal(h.s.recoveryPending, true); assert.equal(h.s.uncertain, true); assert.equal(h.s.canMove(), false);
+  await h.s.move(0, 1); assert.equal(h.calls.filter(c => c.url.endsWith('/moves')).length, 0);
+  const read = h.s.refresh(); h.respond({ room: room() }); await read;
+  assert.equal(h.s.recoveryPending, false); assert.equal(h.s.canMove(), true);
+  assert.ok(notifications.slice(0, -1).every(value => !value)); h.s.destroy();
+});
+
+test('background move never unlocks during notification before recovery GET', async () => {
+  const h = setup(); await entered(h); const seen = [];
+  h.s.changed = () => seen.push({ busy: h.s.busy, canMove: h.s.canMove() });
+  const move = h.s.move(0, 1); h.s.setHidden(true); h.s.setHidden(false);
+  h.respond({ room: room() }); await Promise.resolve(); await Promise.resolve();
+  assert.equal(h.s.reading, true); assert.equal(h.s.canMove(), false);
+  assert.ok(seen.filter(value => !value.busy).every(value => !value.canMove));
+  h.respond({ room: room() }); await move;
+  assert.equal(h.s.canMove(), true); h.s.destroy();
+});
+
+test('background join locks immediately on successful response until recheck succeeds', async () => {
+  const h = setup(); const seen = []; h.s.changed = () => seen.push({ token: !!h.s.token, canMove: h.s.canMove() });
+  const join = h.s.enter(code, preset); h.s.setHidden(true); h.s.setHidden(false);
+  h.respond({ roomCode: code, token, seat: 0, room: room() }); assert.equal(await join, true);
+  assert.equal(h.s.canMove(), false); assert.ok(seen.filter(x => x.token).every(x => !x.canMove));
+  h.respond({ room: room() }); await Promise.resolve(); await Promise.resolve();
+  assert.equal(h.s.canMove(), true); h.s.destroy();
+});
+
+test('recovery state retires on leave and destroy without accepting late read', async () => {
+  const h = setup(); await entered(h); h.s.setHidden(true); h.s.setHidden(false);
+  const stale = h.queue.shift(); const leaving = h.s.leave(); h.respond({});
+  assert.equal(await leaving, true); assert.equal(h.s.recoveryPending, false);
+  stale.resolve({ statusCode: 200, data: { room: room() } }); await Promise.resolve(); await Promise.resolve();
+  assert.equal(h.s.room, null); assert.equal(h.s.token, '');
+  h.s.destroy(); assert.equal(h.s.recoveryPending, false);
+  const live = setup(); await entered(live); live.s.setHidden(true); live.s.setHidden(false);
+  const late = live.queue.shift(); assert.equal(live.s.recoveryPending, true);
+  live.s.destroy(); assert.equal(live.s.recoveryPending, false); assert.equal(live.s.refreshAfterBusy, false);
+  late.resolve({ statusCode: 200, data: { room: room() } }); await Promise.resolve(); await Promise.resolve();
+  assert.equal(live.s.room, null); assert.equal(live.s.token, ''); assert.equal(live.s.canMove(), false);
 });

@@ -125,8 +125,12 @@ function createPlatform(wx) {
     },
     async inputRoomCode() {
       const result = await call('showModal', { title: '加入357房间', editable: true,
-        placeholderText: '8位房间码', confirmText: '预填', cancelText: '取消' });
+        placeholderText: '4位数字房间码', confirmText: '预填', cancelText: '取消' });
       return result.confirm ? result.content : null;
+    },
+    copyRoomCode(code) {
+      if (!CODE.test(code)) throw new Error('房间码无效');
+      return call('setClipboardData', { data: code });
     },
     async confirmProfile() {
       const result = await call('showModal', { title: '确认进入内测房间',
