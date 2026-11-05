@@ -503,7 +503,7 @@ test('home and game share fixed single-page rules without changing a selected po
     return h.calls.slice(dim + 1).filter(c => c.method === 'fillText').map(c => c.args[0]).join('');
   };
   const homeRules = readRules();
-  for (const phrase of ['双方轮流', '每回合只能从一排拿至少一颗', '拿最后一颗的人输', '左边的一方从左往右拿', '右边的一方从右往左拿', '确认拿取 / 取消'])
+  for (const phrase of ['双方轮流', '每回合只能从一排拿至少一颗', '拿最后一颗的人输', '左边的一方从左往右拿', '右边的一方从右往左拿', '确认拿取 / 取消', '每回合30秒', '超时自动取第一排有骰子的一颗'])
     assert.ok(homeRules.includes(phrase), phrase);
   h.touch('modal-close'); pvp(h); h.die(1, 3);
   const state = copy(h.ui.state), selected = copy(h.ui.selected), saved = copy(h.data[KEYS.save]);
@@ -951,4 +951,47 @@ test('avatars are chosen on the home screen and are not editable during a match'
   assert.equal(h.ui.screen, 'game');
   assert.equal(h.ui.state.avatars[0], 1);
   assert.ok(h.ui.hitBoxes.every(b => !b.id.startsWith('avatar') && !b.id.startsWith('choose-avatar')));
+});
+
+test('online clock rearms after an early expiry refresh with the same revision', t => {
+  const h = harness(); t.after(() => h.ui.destroy());
+  let now = 0, refreshes = 0;
+  h.ui.online.relativeNow = () => now;
+  h.ui.openOnline();
+  const profile = { avatar: { type: 'preset', index: 0 } };
+  const snapshot = { code: '2468', revision: 1, status: 'playing',
+    players: [{ seat: 0, profile }, { seat: 1, profile }], game: engine.createGame({ mode: 'pvp' }),
+    turnDeadline: 130000, serverNow: 100000 };
+  h.ui.online.accept(snapshot); h.ui.onlineChanged();
+  h.ui.online.refresh = () => { refreshes++; };
+  assert.equal(h.ui.turnSecondsLeft(), 30);
+  now = 30000;
+  let tick = h.clockTimers().at(-1); h.timers.delete(tick[0]); tick[1].fn();
+  assert.equal(refreshes, 1); assert.equal(h.ui.turnSecondsLeft(), 0);
+  h.ui.online.accept({ ...snapshot, serverNow: 129500 }); h.ui.onlineChanged();
+  assert.equal(h.ui.turnSecondsLeft(), 1);
+  now += 500;
+  tick = h.clockTimers().at(-1); h.timers.delete(tick[0]); tick[1].fn();
+  assert.equal(refreshes, 2, 'new calibration re-arms expiry rather than getting stuck');
+  assert.equal(h.ui.state.history.length, 0, 'client never makes timeout moves');
+});
+
+test('online defaults to home avatar without overwriting an explicit online selection', t => {
+  const h = harness(); t.after(() => h.ui.destroy());
+  h.ui.settings.avatars[0] = 2; h.ui.openOnline();
+  assert.equal(h.ui.onlineProfile.avatar.index, 2);
+  h.touch('online-preset'); assert.equal(h.ui.onlineProfile.avatar.index, 3);
+  h.ui.settings.avatars[0] = 4; h.ui.openOnline();
+  assert.equal(h.ui.onlineProfile.avatar.index, 3);
+});
+
+test('online recovery displays checking status without hiding an existing error', t => {
+  const h = harness(); t.after(() => h.ui.destroy()); h.ui.openOnline();
+  const profile = { avatar: { type: 'preset', index: 0 } };
+  h.ui.online.accept({ code: '2468', revision: 1, status: 'playing',
+    players: [{ seat: 0, profile }, { seat: 1, profile }], game: engine.createGame({ mode: 'pvp' }) });
+  h.ui.online.recoveryPending = true; h.calls.length = 0; h.ui.onlineChanged();
+  assert.ok(h.calls.some(c => c.method === 'fillText' && c.args[0] === '正在确认服务端状态…'));
+  h.ui.online.error = '核对失败'; h.calls.length = 0; h.ui.render();
+  assert.ok(h.calls.some(c => c.method === 'fillText' && c.args[0] === '核对失败'));
 });

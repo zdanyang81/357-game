@@ -85,6 +85,7 @@ function normalizeRoom(room) {
     revision: room.revision == null || room.revision === '' ? (waiting ? 0 : room.revision) : asNumber(room.revision, room.revision),
     status: room.status, players, expiresAt: room.expiresAt,
     turnDeadline: typeof parsedDeadline === 'number' && Number.isFinite(parsedDeadline) ? parsedDeadline : null,
+    serverNow: room.serverNow == null || room.serverNow === '' ? null : asNumber(room.serverNow, null),
     game: waiting || room.game == null || room.game === '' ? null : acceptGame(room.game)
   };
 }
@@ -118,6 +119,19 @@ class OnlineSession {
     this.busy = false; this.hidden = false; this.destroyed = false; this.epoch = 0;
     this.timer = null; this.error = ''; this.uncertain = false; this.serial = 0;
     this.creationUnknown = false; this.reading = false; this.expired = false;
+    this.clockSample = null; this.clockGeneration = 0; this.responseSamples = new WeakMap();
+    this.requestSequence = 0; this.acceptedSequence = 0; this.readGeneration = 0;
+    this.clockEpoch = 0; this.refreshAfterBusy = false; this.recoveryPending = false;
+    // WeChat exposes a monotonic clock on supported versions; keep the same clock
+    // for the lifetime of this session. Older runtimes fall back to wall time.
+    let perf = null;
+    try {
+      if (typeof wx !== 'undefined' && typeof wx.getPerformance === 'function') perf = wx.getPerformance();
+      else if (typeof performance !== 'undefined') perf = performance;
+    } catch (_) {}
+    this.relativeNow = typeof platform.monotonicNow === 'function' ? () => platform.monotonicNow() :
+      perf && typeof perf.now === 'function' ? () => perf.now() :
+      typeof platform.now === 'function' ? () => platform.now() : () => Date.now();
   }
   notify() { if (!this.destroyed) this.changed(); }
   stopTimer() { if (this.timer !== null) this.p.clearTimeout(this.timer); this.timer = null; }
@@ -131,8 +145,11 @@ class OnlineSession {
     const header = auth ? { Authorization: 'Bearer ' + this.token } : {};
     if (data !== undefined) header['Content-Type'] = 'application/json';
     if (this.accessKey) header['X-357-Access-Key'] = this.accessKey;
+    const started = this.relativeNow(), sequence = ++this.requestSequence, clockEpoch = this.clockEpoch;
     return this.p.request({ url: this.base + path, method, data, header, timeout: 8000, dataType: 'json' }).then(res => {
+      const received = this.relativeNow();
       const body = normalizePayload(res && res.data);
+      if (body && typeof body === 'object') this.responseSamples.set(body, { received, sequence, clockEpoch, rtt: Math.max(0, received - started) });
       const rawStatus = res && (res.statusCode != null ? res.statusCode : res.status);
       const status = Number(rawStatus);
       const hasStatus = Number.isInteger(status) && status > 0;
@@ -147,11 +164,31 @@ class OnlineSession {
       return body;
     });
   }
-  accept(room) {
+  accept(room, response) {
     const normalized = normalizeRoom(room);
     if (!validRoom(normalized) || (this.room && normalized.code !== this.room.code)) throw new Error('房间响应格式错误');
     if (this.room && normalized.revision < this.room.revision) return;
+    const serverNow = Number.isFinite(normalized.serverNow) ? normalized.serverNow : null;
+    const timing = response && this.responseSamples.get(response);
+    // Server wall time may move backwards. Order equal-revision snapshots by
+    // request dispatch instead; a higher authoritative revision always wins.
+    if (this.room && normalized.revision === this.room.revision && timing && timing.sequence < this.acceptedSequence) return;
     this.room = normalized;
+    if (timing) this.acceptedSequence = timing.sequence;
+    const received = timing ? timing.received : this.relativeNow();
+    if (normalized.status === 'playing' && normalized.turnDeadline != null && (!timing || timing.clockEpoch === this.clockEpoch)) {
+      // The snapshot was made during the request; half the RTT is an estimate of
+      // response transit. The server remains authoritative if this is early.
+      const wallNow = typeof this.p.now === 'function' ? this.p.now() : Date.now();
+      const remaining = normalized.turnDeadline - (serverNow == null ? wallNow : serverNow) -
+        (serverNow == null || !timing ? 0 : timing.rtt / 2);
+      this.clockSample = { serverNow, until: received + Math.max(0, remaining) };
+    } else this.clockSample = null;
+    this.clockGeneration++;
+    return true;
+  }
+  remainingTurnMs() {
+    return this.clockSample ? Math.max(0, this.clockSample.until - this.relativeNow()) : null;
   }
   async enter(code, profile) {
     if (this.busy || this.token || this.creationUnknown || this.destroyed) return false;
@@ -164,7 +201,7 @@ class OnlineSession {
       const room = data && normalizeRoom(data.room);
       if (!data || !validRoom(room) || data.roomCode !== room.code || ![0, 1].includes(data.seat) ||
           typeof data.token !== 'string' || data.token.length < 16) throw new Error('房间响应格式错误');
-      this.accept(room); this.token = data.token; this.seat = data.seat; this.uncertain = false; this.expired = false;
+      this.accept(room, data); this.token = data.token; this.seat = data.seat; this.uncertain = false; this.expired = false;
       return true;
     } catch (error) {
       if (epoch === this.epoch && !this.destroyed) {
@@ -176,32 +213,40 @@ class OnlineSession {
         this.error = this.creationUnknown ? '创建/加入结果未知，已停止重复操作。\n原因：' + reason + '\n请新建房间码，不要重复加入刚才那个。' : reason;
       }
       return false;
-    } finally { if (epoch === this.epoch) { this.busy = false; this.notify(); this.schedule(); } }
+    } finally { if (epoch === this.epoch) {
+      this.busy = false; this.notify();
+      if (!this.token) { this.refreshAfterBusy = false; this.recoveryPending = false; }
+      if (this.refreshAfterBusy && !this.hidden && this.token) this.refresh(); else this.schedule();
+    } }
   }
   async refresh() {
     if (!this.token || this.reading || this.busy || this.hidden || this.destroyed) return;
-    const epoch = this.epoch; this.reading = true;
+    this.refreshAfterBusy = false;
+    const epoch = this.epoch, generation = ++this.readGeneration; this.reading = true;
     try {
       const data = await this.request('GET', '/v1/rooms/' + this.room.code, undefined, true);
-      if (epoch !== this.epoch || this.destroyed) return;
-      this.accept(data.room); this.uncertain = false; this.expired = false; this.error = '';
+      if (epoch !== this.epoch || generation !== this.readGeneration || this.destroyed) return;
+      if (!this.accept(data.room, data)) throw new Error('房间响应已过期');
+      this.recoveryPending = false; this.uncertain = false; this.expired = false; this.error = '';
     } catch (error) {
-      if (epoch === this.epoch && !this.destroyed) {
+      if (epoch === this.epoch && generation === this.readGeneration && !this.destroyed) {
         this.expired = [401, 404, 410].includes(error.statusCode);
         this.error = this.expired ? '房间已关闭/过期或会话失效，请离开房间' : error.message + '；可手动刷新';
         this.uncertain = true;
       }
-    } finally { if (epoch === this.epoch) { this.reading = false; this.notify(); this.schedule(); } }
+    } finally { if (epoch === this.epoch && generation === this.readGeneration) { this.reading = false; this.notify(); this.schedule(); } }
   }
   async move(row, count) {
     if (!this.canMove()) return;
     const epoch = this.epoch;
+    // A pre-move read cannot settle the result of this mutation.
+    this.readGeneration++; this.reading = false;
     const data = { actionId: 'move_' + Date.now().toString(36) + '_' + (++this.serial),
       expectedRevision: this.room.revision, row, count };
     this.busy = true; this.stopTimer(); this.error = ''; this.notify(); let recheck = false;
     try {
       const result = await this.request('POST', '/v1/rooms/' + this.room.code + '/moves', data, true);
-      if (epoch === this.epoch && !this.destroyed) this.accept(result.room);
+      if (epoch === this.epoch && !this.destroyed) this.accept(result.room, result);
     } catch (error) {
       if (epoch === this.epoch && !this.destroyed) {
         this.error = '走子未确认，正在核对权威棋盘'; this.uncertain = true; recheck = true;
@@ -209,18 +254,18 @@ class OnlineSession {
     } finally {
       if (epoch === this.epoch) {
         this.busy = false; this.notify();
-        if (recheck) { this.reading = false; await this.refresh(); } else this.schedule();
+        if (recheck || this.refreshAfterBusy) await this.refresh(); else this.schedule();
       }
     }
   }
-  canMove() { return !!this.token && !this.busy && !this.uncertain && !this.hidden && !this.destroyed &&
+  canMove() { return !!this.token && !this.busy && !this.uncertain && !this.recoveryPending && !this.hidden && !this.destroyed &&
     this.room.status === 'playing' && this.room.game.currentPlayer === this.seat; }
   async leave() {
     if (!this.token || this.busy || this.destroyed) return false;
     if (this.expired) {
       // Authority already confirmed this session is gone: discard locally, never resend leave.
       this.stopTimer(); this.epoch++; this.token = ''; this.room = null; this.seat = null;
-      this.reading = false; this.uncertain = false; this.error = ''; this.notify(); return true;
+      this.reading = false; this.uncertain = false; this.recoveryPending = false; this.refreshAfterBusy = false; this.error = ''; this.notify(); return true;
     }
     if (this.uncertain) { await this.refresh(); return false; }
     // A GET started before this mutation cannot confirm its outcome.
@@ -229,21 +274,31 @@ class OnlineSession {
     try {
       await this.request('POST', '/v1/rooms/' + this.room.code + '/leave', {}, true);
       if (epoch !== this.epoch || this.destroyed) return false;
-      this.epoch++; this.token = ''; this.room = null; this.seat = null; this.error = ''; this.uncertain = false;
+      this.epoch++; this.token = ''; this.room = null; this.seat = null; this.error = ''; this.uncertain = false; this.refreshAfterBusy = false; this.recoveryPending = false;
       this.reading = false; this.busy = false; this.notify(); return true;
     } catch (error) {
       if (epoch === this.epoch && [401, 404, 410].includes(error.statusCode)) {
         this.epoch++; this.token = ''; this.room = null; this.seat = null; this.busy = false; this.reading = false;
+        this.recoveryPending = false; this.refreshAfterBusy = false;
         this.error = '房间或会话已失效'; this.notify(); return true;
       }
       if (epoch === this.epoch && !this.destroyed) {
         this.error = '离开结果未确认；正在只读核对房间，可手动刷新';
-        this.busy = false; this.uncertain = true; this.notify(); this.schedule();
+        this.busy = false; this.uncertain = true; this.notify();
+        if (this.refreshAfterBusy && !this.hidden) this.refresh(); else this.schedule();
       }
       return false;
     }
   }
-  setHidden(hidden) { this.hidden = hidden; this.stopTimer(); if (!hidden) this.refresh(); }
-  destroy() { this.stopTimer(); this.epoch++; this.destroyed = true; this.token = ''; this.room = null; }
+  setHidden(hidden) {
+    this.hidden = hidden; this.stopTimer();
+    if (hidden) {
+      this.clockEpoch++; this.readGeneration++; this.reading = false;
+      this.clockSample = null; this.clockGeneration++;
+      if (this.token || this.busy) this.recoveryPending = true;
+      if (this.busy) this.refreshAfterBusy = true;
+    } else this.refresh();
+  }
+  destroy() { this.stopTimer(); this.epoch++; this.destroyed = true; this.token = ''; this.room = null; this.recoveryPending = false; this.refreshAfterBusy = false; }
 }
 module.exports = { OnlineSession, inviteCode, normalizeCode, codeIssue, validRoom, normalizePayload, CODE, SHORT, LEGACY, LEGACY_ALPHABET };

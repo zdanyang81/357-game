@@ -189,9 +189,15 @@ class GameUI {
   }
 
   turnSecondsLeft() {
+    const remaining = this.turnRemainingMs();
+    if (remaining == null || !this.state || this.state.winner !== null || (!this.onlineMode && this.isAI())) return null;
+    return Math.max(0, Math.ceil(remaining / 1000));
+  }
+
+  turnRemainingMs() {
+    if (this.onlineMode) return this.online ? this.online.remainingTurnMs() : null;
     const deadline = this.activeDeadline();
-    if (deadline == null || !this.state || this.state.winner !== null || (!this.onlineMode && this.isAI())) return null;
-    return Math.max(0, Math.ceil((deadline - this.now()) / 1000));
+    return deadline == null ? null : Math.max(0, deadline - this.now());
   }
 
   humanTurnReady() {
@@ -211,23 +217,25 @@ class GameUI {
 
   armTurnClock() {
     const token = (this.turnClockToken = (this.turnClockToken || 0) + 1);
-    const deadline = this.activeDeadline();
-    if (deadline == null || this.destroyed || this.hidden || this.screen !== 'game' || !this.state || this.state.winner !== null) return;
+    const remaining = this.turnRemainingMs();
+    if (remaining == null || this.destroyed || this.hidden || this.screen !== 'game' || !this.state || this.state.winner !== null) return;
     const fire = () => {
       if (token !== this.turnClockToken || this.destroyed || this.hidden) return;
-      const current = this.activeDeadline();
+      const current = this.turnRemainingMs();
       if (current == null || this.screen !== 'game' || !this.state || this.state.winner !== null) return;
-      if (this.now() + 25 >= current) {
+      if (current <= (this.onlineMode ? 0 : 25)) {
         if (this.onlineMode) {
+          if (!this.modal) this.render();
           if (this.online && !this.online.busy && !this.online.reading) this.online.refresh();
+          // Polling continues even when a refresh arrives before the server deadline.
         } else if (this.humanTurnReady()) this.applyTurnTimeout();
         else this.later(fire, 200, true);
         return;
       }
       if (!this.modal) this.render();
-      this.later(fire, Math.min(1000, Math.max(16, current - this.now())), true);
+      this.later(fire, Math.min(1000, Math.max(16, current)), true);
     };
-    this.later(fire, Math.min(1000, Math.max(16, deadline - this.now())), true);
+    this.later(fire, remaining <= 0 && this.onlineMode ? 1000 : Math.min(1000, Math.max(16, remaining)), true);
   }
 
   applyTurnTimeout() {
@@ -762,7 +770,7 @@ class GameUI {
         bx + 56, y + 40, 12, seconds != null && seconds <= 5 ? GOLD : MUTED);
     });
     y += 73;
-    const status = this.onlineMode && this.online.error ? this.online.error : this.onlineMode && this.online.busy ? '正在确认服务端状态…' : this.state.winner !== null ? '本局结束 · 拿最后一颗的人输' : this.phase === 'thinking' ? '电脑正在思考…' :
+    const status = this.onlineMode && this.online.error ? this.online.error : this.onlineMode && (this.online.busy || this.online.recoveryPending) ? '正在确认服务端状态…' : this.state.winner !== null ? '本局结束 · 拿最后一颗的人输' : this.phase === 'thinking' ? '电脑正在思考…' :
       this.phase === 'animating' ? this.toast : this.selected ? '第 ' + (this.selected.row + 1) + ' 排 · 已选' + (this.state.currentPlayer === 0 ? '左' : '右') + '起 ' + this.selected.count + ' 颗' :
       this.playerName(this.state.currentPlayer) + '：点一颗骰子，从' + (this.state.currentPlayer === 0 ? '左' : '右') + '边起选 N 颗';
     this.text(status, w / 2, y, 13, GOLD, 'center', 'normal', span); y += 17;
@@ -837,7 +845,7 @@ class GameUI {
         actions = [['重新开始', () => { this.resumeCandidate = null; this.startGame(); }], ['继续对局', () => this.restore()]];
         break;
       case 'rules':
-        content = '① 双方轮流，每回合只能从一排拿至少一颗。\n\n② 拿最后一颗的人输。\n\n③ 左边的一方从左往右拿，右边的一方从右往左拿：点一颗骰子即选中到它为止的 N 颗，确认拿取 / 取消。';
+        content = '① 双方轮流，每回合只能从一排拿至少一颗。\n\n② 拿最后一颗的人输。\n\n③ 左边的一方从左往右拿，右边的一方从右往左拿：点一颗骰子即选中到它为止的 N 颗，确认拿取 / 取消。\n\n每回合30秒，超时自动取第一排有骰子的一颗。';
         break;
       case 'online-consent':
         content = (modal.join ? '将加入房间：' + modal.code : '将创建随机房间，无需填写加入房间码。') +
