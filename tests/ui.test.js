@@ -660,23 +660,26 @@ test('destroy cancels timers, unsubscribes callbacks, and rejects already queued
 test('online lobby is bounded on narrow screen; invites only prefill and never autojoin', t => {
   const h = harness({ safeTop: 84 }); t.after(() => h.ui.destroy());
   let requests = 0; h.platform.request = () => { requests++; throw new Error('unexpected'); };
-  h.emit('show', { query: { room: 'ABCDEFG2', apiBase: 'https://evil', token: 'evil' } });
-  assert.equal(h.ui.screen, 'home'); assert.equal(h.ui.onlineCode, 'ABCDEFG2'); assert.equal(requests, 0);
+  h.emit('show', { query: { room: '2468', apiBase: 'https://evil', token: 'evil' } });
+  assert.equal(h.ui.screen, 'home'); assert.equal(h.ui.onlineCode, '2468'); assert.equal(requests, 0);
   h.touch('online'); withinSafeArea(h, 'online lobby');
   assert.equal(h.ui.online.enabled, false);
   assert.equal(h.ui.hitBoxes.find(b => b.id === 'online-create').disabled, true);
-  h.emit('show', { query: { room: 'BCDEFGH2' } }); assert.equal(h.ui.onlineCode, 'BCDEFGH2'); assert.equal(requests, 0);
+  h.emit('show', { query: { room: '1357' } }); assert.equal(h.ui.onlineCode, '1357'); assert.equal(requests, 0);
   h.ui.online.enabled = true;
-  h.emit('show', { query: { room: 'ABCDEF89' } }); assert.equal(h.ui.onlineCode, 'ABCDEF89');
+  h.emit('show', { query: { room: '8024' } }); assert.equal(h.ui.onlineCode, '8024');
+  h.touch('online-code'); withinSafeArea(h, 'room code pad');
   assert.equal(h.ui.hitBoxes.find(b => b.id === 'online-join').disabled, false);
-  h.ui.onlineCode = 'ABCDEFIO'; h.ui.render();
+  for (const digit of '0123456789') assert.ok(h.ui.hitBoxes.some(box => box.id === 'code-key-' + digit), 'missing number key ' + digit);
+  assert.ok(h.calls.some(call => call.method === 'fillText' && call.args[0] === '8'), 'room digits are visible text, not blank keys');
+  h.ui.onlineCode = '12ab'; h.ui.render();
   assert.equal(h.ui.hitBoxes.find(b => b.id === 'online-join').disabled, true);
 });
 
 test('failed leave is visible above the confirmation modal and keeps a read-only recovery path', async t => {
   const h = harness(); t.after(() => h.ui.destroy()); h.touch('online');
   const game = engine.createGame({ mode: 'pvp' });
-  h.ui.online.room = { code: 'ABCDEFG2', revision: 1, status: 'playing', game,
+  h.ui.online.room = { code: '2468', revision: 1, status: 'playing', game,
     players: [0, 1].map(seat => ({ seat, profile: { avatar: { type: 'preset', index: 0 } } })) };
   h.ui.online.token = 'test-token-000000000000'; h.ui.online.seat = 0; h.ui.onlineChanged();
   h.ui.openModal('leave');
@@ -695,7 +698,7 @@ for (const unknown of [false, true]) test('real terminal online leave retires re
   const h = harness(); t.after(() => h.ui.destroy()); h.touch('online');
   let game = engine.createGame({ mode: 'pvp' });
   while (game.winner === null) game = engine.move(game, game.piles.findIndex(n => n > 0), 1);
-  const room = { code: 'ABCDEFG2', revision: game.history.length, status: 'finished', game,
+  const room = { code: '2468', revision: game.history.length, status: 'finished', game,
     players: [0, 1].map(seat => ({ seat, profile: { avatar: { type: 'preset', index: 0 } } })) };
   const requests = [];
   h.ui.online.enabled = true; h.ui.online.base = 'https://rooms.example.test';
@@ -737,18 +740,18 @@ test('Canvas consent does not wait for a native confirmation promise that never 
 
 test('Canvas room consent cancels without requests and accepts a frozen join/profile snapshot once', async t => {
   const h = harness({ safeTop: 84 }); t.after(() => h.ui.destroy()); h.touch('online');
-  h.ui.onlineCode = 'ABCDEF89'; h.ui.online.enabled = true;
+  h.ui.onlineCode = '8024'; h.ui.online.enabled = true;
   const calls = []; let complete;
   h.ui.online.enter = (code, profile) => { calls.push({ code, profile }); return new Promise(done => { complete = done; }); };
   h.ui.enterOnline(true); const cancelled = h.ui.modal;
   h.touch('modal-action-0'); await h.ui.confirmOnlineConsent(cancelled); assert.equal(calls.length, 0);
   h.ui.enterOnline(true); const consent = h.ui.modal;
-  const expected = copy(h.ui.onlineProfile); h.ui.onlineProfile.avatar.index = 4; h.ui.onlineCode = 'BCDEFG89';
+  const expected = copy(h.ui.onlineProfile); h.ui.onlineProfile.avatar.index = 4; h.ui.onlineCode = '9753';
   withinSafeArea(h, 'join consent');
   assert.equal(consent.pages, 1, 'critical consent text is visible on one page');
   const pending = h.ui.confirmOnlineConsent(consent);
   await h.ui.confirmOnlineConsent(consent); h.ui.enterOnline(false);
-  assert.equal(calls.length, 1); assert.deepEqual(calls[0], { code: 'ABCDEF89', profile: expected });
+  assert.equal(calls.length, 1); assert.deepEqual(calls[0], { code: '8024', profile: expected });
   complete(true); await pending; assert.equal(h.ui.profileBusy, false);
 });
 
@@ -785,11 +788,11 @@ test('random room creation never requires or submits the code field reserved for
   const submitted = [];
   h.platform.confirmProfile = () => { assert.fail('room entry no longer uses native confirmation'); };
   h.ui.online.enter = async code => { submitted.push(code); return true; };
-  for (const joinCode of ['', 'ABCDEF89', 'INVALID1']) {
+  for (const joinCode of ['', '8024', '12a']) {
     h.ui.onlineCode = joinCode; h.ui.render();
     assert.equal(h.ui.hitBoxes.find(b => b.id === 'online-create').disabled, false);
     h.ui.enterOnline(false); assert.equal(h.ui.modal.type, 'online-consent');
-    assert.equal(submitted.length, ['', 'ABCDEF89', 'INVALID1'].indexOf(joinCode));
+    assert.equal(submitted.length, ['', '8024', '12a'].indexOf(joinCode));
     await h.ui.confirmOnlineConsent(h.ui.modal);
   }
   assert.deepEqual(submitted, ['', '', '']);
@@ -798,7 +801,7 @@ test('random room creation never requires or submits the code field reserved for
 test('network board only accepts own turn; no local AI, optimistic move, save or result ledger', async t => {
   const h = harness(); t.after(() => h.ui.destroy()); h.touch('online');
   const profile = { avatar: { type: 'preset', index: 0 } };
-  h.ui.online.room = { code: 'ABCDEFG2', revision: 1, status: 'playing', players: [{ seat: 0, profile }, { seat: 1, profile }], game: engine.createGame({ mode: 'pvp' }) };
+  h.ui.online.room = { code: '2468', revision: 1, status: 'playing', players: [{ seat: 0, profile }, { seat: 1, profile }], game: engine.createGame({ mode: 'pvp' }) };
   h.ui.online.token = 'session-token'; h.ui.online.seat = 1; h.ui.onlineChanged();
   assert.equal(h.ui.canPlay(), false); h.ui.scheduleAI(); assert.equal(h.timers.size, 0);
   h.ui.online.seat = 0; assert.equal(h.ui.canPlay(), true);

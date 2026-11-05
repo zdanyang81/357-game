@@ -3,7 +3,7 @@
 const crypto = require('node:crypto');
 const zlib = require('node:zlib');
 const engine = require('../minigame/core/engine');
-const CODE = /^[A-HJ-NP-Z2-9]{8}$/;
+const CODE = /^[0-9]{4}$/;
 const TOKEN = /^[a-f0-9]{64}$/;
 const MAX_IMAGE = 128 * 1024;
 const clone = value => JSON.parse(JSON.stringify(value));
@@ -90,7 +90,6 @@ function createRoomService(options = {}) {
   const now = options.now || Date.now, idleMs = options.idleMs || 30 * 60 * 1000, maxAgeMs = options.maxAgeMs || 4 * 60 * 60 * 1000;
   const capacity = options.capacity || 100, rooms = new Map();
   const randomFirst = options.randomFirst || (() => crypto.randomInt(2));
-  const alphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
   function sweep() {
     const time = now();
     for (const [code, room] of rooms) if (time >= room.expiresAt) rooms.delete(code);
@@ -117,7 +116,7 @@ function createRoomService(options = {}) {
       const clean = validateProfile(profile); sweep();
       if (rooms.size >= capacity) fail(503, 'ROOM_CAPACITY', '当前内测房间已满，请稍后再试');
       let code;
-      do { code = Array.from(crypto.randomBytes(8), byte => alphabet[byte & 31]).join(''); } while (rooms.has(code));
+      do { code = String(crypto.randomInt(10000)).padStart(4, '0'); } while (rooms.has(code));
       const room = { code, createdAt: now(), expiresAt: 0, revision: 0, status: 'waiting', game: null,
         members: [{ token: crypto.randomBytes(32).toString('hex'), profile: clean, actions: new Map() }] };
       touch(room); rooms.set(code, room); return credentials(room, 0);
