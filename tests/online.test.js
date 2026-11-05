@@ -68,6 +68,100 @@ test('real room service responses flow through two OnlineSessions end to end', a
   assert.ok(calls.every(call => credentials.every(secret => !call.url.includes(secret))));
 });
 
+// The session requires an HTTPS base in production. This adapter permits only that
+// fixed synthetic origin and sends its requests to an ephemeral loopback HTTP listener.
+async function timedHTTPRoom(t) {
+  const http = require('node:http');
+  const { createHTTPServer } = require('../server/http');
+  let time = 1000000;
+  const now = () => time;
+  const server = createHTTPServer({ now, service: createRoomService({ now, turnMs: 30000, randomFirst: () => 0 }) });
+  await new Promise((resolve, reject) => { server.once('error', reject); server.listen(0, '127.0.0.1', resolve); });
+  t.after(() => new Promise((resolve, reject) => server.close(error => error ? reject(error) : resolve())));
+  const port = server.address().port;
+  const sessions = [];
+  t.after(() => { for (const session of sessions) session.destroy(); });
+  function client(wallOffset, relativeOffset) {
+    const timers = new Map(); let timerId = 0;
+    const platform = {
+      now: () => time + wallOffset, monotonicNow: () => time + relativeOffset,
+      setTimeout(fn) { timers.set(++timerId, fn); return timerId; },
+      clearTimeout(id) { timers.delete(id); },
+      request(options) {
+        const url = new URL(options.url);
+        assert.equal(url.origin, 'https://room.invalid');
+        return new Promise((resolve, reject) => {
+          const request = http.request({ hostname: '127.0.0.1', port, path: url.pathname,
+            method: options.method, headers: options.header, agent: false }, response => {
+            const chunks = [];
+            response.on('data', chunk => chunks.push(chunk));
+            response.on('error', reject);
+            response.on('end', () => {
+              try { resolve({ statusCode: response.statusCode, data: JSON.parse(Buffer.concat(chunks).toString()) }); }
+              catch (error) { reject(error); }
+            });
+          });
+          request.on('error', reject);
+          if (options.data !== undefined) request.write(JSON.stringify(options.data));
+          request.end();
+        });
+      }
+    };
+    const session = new OnlineSession(platform, 'https://room.invalid');
+    sessions.push(session);
+    return session;
+  }
+  return { client, advance(ms) { time += ms; } };
+}
+
+test('loopback HTTP sessions share countdown and accept a move before deadline', async t => {
+  const h = await timedHTTPRoom(t);
+  const host = h.client(900000000, 12000), guest = h.client(-700000000, 430000);
+  assert.equal(await host.enter('', preset), true);
+  assert.equal(await guest.enter(host.room.code, preset), true);
+  await host.refresh();
+  assert.equal(host.remainingTurnMs(), 30000);
+  assert.equal(guest.remainingTurnMs(), 30000);
+  h.advance(29999);
+  assert.equal(host.remainingTurnMs(), 1);
+  assert.equal(guest.remainingTurnMs(), 1);
+  assert.equal(host.canMove(), true);
+  const before = host.room.game;
+  await host.move(0, 1);
+  assert.deepEqual(host.room.game, engine.move(before, 0, 1));
+  assert.equal(host.room.revision, 2);
+  await guest.refresh();
+  assert.deepEqual(guest.room.game, host.room.game);
+  assert.equal(host.remainingTurnMs(), 30000);
+  assert.equal(guest.remainingTurnMs(), 30000);
+  assert.equal(guest.canMove(), true);
+});
+
+test('loopback HTTP timeout advances authoritative game and synchronizes both sessions', async t => {
+  const h = await timedHTTPRoom(t);
+  const host = h.client(-400000000, 7000), guest = h.client(800000000, 900000);
+  assert.equal(await host.enter('', preset), true);
+  assert.equal(await guest.enter(host.room.code, preset), true);
+  await host.refresh();
+  const before = host.room.game;
+  assert.equal(host.remainingTurnMs(), 30000);
+  assert.equal(guest.remainingTurnMs(), 30000);
+  h.advance(30001);
+  assert.equal(host.remainingTurnMs(), 0);
+  assert.equal(guest.remainingTurnMs(), 0);
+  // A read through the HTTP handler triggers server-side timeout enforcement.
+  await guest.refresh();
+  assert.equal(guest.room.revision, 2);
+  assert.deepEqual(guest.room.game, engine.move(before, 0, 1));
+  assert.equal(guest.remainingTurnMs(), 29999);
+  await host.refresh();
+  assert.deepEqual(host.room.game, guest.room.game);
+  assert.equal(host.room.revision, guest.room.revision);
+  assert.equal(host.remainingTurnMs(), 29999);
+  assert.equal(host.canMove(), false);
+  assert.equal(guest.canMove(), true);
+});
+
 test('invitations validate only room code; never accept external endpoint/token', () => {
   assert.equal(inviteCode({ room: ' 2468 ', apiBase: 'https://evil', token }), code);
   for (const value of ['12345678', '12a4', '', null, 123, 'ABCDEFIO', '13800138000']) assert.equal(inviteCode({ room: value }), '');
