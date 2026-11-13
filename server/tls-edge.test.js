@@ -30,18 +30,18 @@ function json(res, body = { ok: true }, status = 200) { res.writeHead(status, { 
 test('only fixed API paths and exact methods can reach loopback upstream', async t => {
   const paths = [];
   const { edgePort } = await fixture(t, (req, res) => { paths.push(req.url); json(res); });
-  for (const [method, path] of [['GET', '/healthz'], ['POST', '/v1/rooms'], ['GET', '/v1/rooms/ABCDEF89'],
-    ['POST', '/v1/rooms/ABCDEF89/join'], ['POST', '/v1/rooms/ABCDEF89/moves'], ['POST', '/v1/rooms/ABCDEF89/leave']]) {
+  for (const [method, path] of [['GET', '/healthz'], ['POST', '/v1/rooms'], ['GET', '/v1/rooms/2468'],
+    ['POST', '/v1/rooms/2468/join'], ['POST', '/v1/rooms/2468/moves'], ['POST', '/v1/rooms/2468/leave']]) {
     assert.equal((await request(edgePort, { method, path })).status, 200);
   }
   const before = paths.length;
-  for (const path of ['/v1/rooms', '/v1/rooms/ABCDEFIO', '/v1/rooms/ABCDEF01', '/v1/rooms/ABCDEF89/moves',
-    '/healthz?target=http://evil', '/v1/rooms/ABCDEF89?token=secret', '/healthz#fragment',
+  for (const path of ['/v1/rooms', '/v1/rooms/12ab', '/v1/rooms/12345', '/v1/rooms/2468/moves',
+    '/healthz?target=http://evil', '/v1/rooms/2468?token=secret', '/healthz#fragment',
     'http://example.test/healthz', '//example.test/healthz', '/v1/rooms/../../healthz', '/%68ealthz', '/healthz/', '/admin', '/']) {
     assert.equal((await request(edgePort, { path })).status, 404, path);
   }
   assert.equal((await request(edgePort, { method: 'OPTIONS' })).status, 404);
-  assert.equal((await request(edgePort, { method: 'DELETE', path: '/v1/rooms/ABCDEF89' })).status, 404);
+  assert.equal((await request(edgePort, { method: 'DELETE', path: '/v1/rooms/2468' })).status, 404);
   assert.equal(paths.length, before);
 });
 

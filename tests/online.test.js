@@ -4,7 +4,7 @@ const assert = require('node:assert/strict');
 const engine = require('../minigame/core/engine');
 const { OnlineSession, inviteCode, CODE } = require('../minigame/online');
 const { createRoomService, CODE: SERVER_CODE } = require('../server/rooms');
-const code = 'ABCDEFG2', token = 'test-token-000000000000000000';
+const code = '2468', token = 'test-token-000000000000000000';
 const preset = { avatar: { type: 'preset', index: 0 } };
 const room = (revision = 1, game = engine.createGame({ mode: 'pvp' })) => ({ code, revision, status: game.winner === null ? 'playing' : 'finished', players: [{ seat: 0, profile: preset }, { seat: 1, profile: preset }], game });
 function setup() {
@@ -18,19 +18,23 @@ async function entered(h) {
   const pending = h.s.enter(code, preset);
   h.respond({ roomCode: code, token, seat: 0, room: room() }); await pending;
 }
-test('all code validators match server alphabet including 8/9 and excluding I/O/0/1', () => {
-  for (const char of 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789/_-') {
-    const value = 'ABCDEF' + char + char;
+test('room codes are exactly 4 digits and match the server', () => {
+  for (let n = 0; n < 10000; n += 137) {
+    const value = String(n).padStart(4, '0');
+    assert.equal(CODE.test(value), true, value);
     assert.equal(CODE.test(value), SERVER_CODE.test(value), value);
-    assert.equal(inviteCode({ room: value }), SERVER_CODE.test(value) ? value : '', value);
+    assert.equal(inviteCode({ room: value }), value);
   }
-  assert.equal(inviteCode({ room: ' abcdef89 ' }), 'ABCDEF89');
+  for (const value of ['12345', '123', '12a4', 'ABCDEFIO', '']) assert.equal(inviteCode({ room: value }), '');
+  assert.equal(inviteCode({ room: 'abcdefgh' }), 'ABCDEFGH');
+  assert.equal(inviteCode({ room: '12 48' }), '1248');
+  assert.equal(inviteCode({ room: ' ０２４６ ' }), '0246');
+  assert.equal(inviteCode({ room: '房间码：1357' }), '1357');
 });
 
-test('real room service responses with 8/9 flow through two OnlineSessions end to end', async t => {
-  const crypto = require('node:crypto'), randomBytes = crypto.randomBytes;
-  // Force a real service-generated invitation containing the previously rejected digits.
-  t.mock.method(crypto, 'randomBytes', size => size === 8 ? Buffer.from([0, 1, 2, 3, 4, 5, 30, 31]) : randomBytes(size));
+test('real room service responses flow through two OnlineSessions end to end', async t => {
+  const crypto = require('node:crypto');
+  t.mock.method(crypto, 'randomInt', () => 2589);
   const service = createRoomService({ randomFirst: () => 0 });
   const calls = [];
   const platform = {
@@ -53,7 +57,7 @@ test('real room service responses with 8/9 flow through two OnlineSessions end t
   const host = new OnlineSession(platform, 'https://test.invalid'), guest = new OnlineSession(platform, 'https://test.invalid');
   t.after(() => { host.destroy(); guest.destroy(); });
   assert.equal(await host.enter('', preset), true);
-  assert.equal(host.room.code, 'ABCDEF89'); assert.equal(host.creationUnknown, false);
+  assert.equal(host.room.code, '2589'); assert.equal(host.creationUnknown, false);
   assert.equal(await guest.enter(host.room.code, preset), true);
   assert.equal(guest.seat, 1); await host.refresh(); assert.equal(host.canMove(), true);
   await host.move(0, 1); await guest.refresh();
@@ -65,8 +69,9 @@ test('real room service responses with 8/9 flow through two OnlineSessions end t
 });
 
 test('invitations validate only room code; never accept external endpoint/token', () => {
-  assert.equal(inviteCode({ room: ' abcdefg2 ', apiBase: 'https://evil', token }), code);
-  for (const value of ['12345678', 'ABCD/EFG', '', null, 123]) assert.equal(inviteCode({ room: value }), '');
+  assert.equal(inviteCode({ room: ' 2468 ', apiBase: 'https://evil', token }), code);
+  for (const value of ['12345678', '12a4', '', null, 123, 'ABCDEFIO', '13800138000']) assert.equal(inviteCode({ room: value }), '');
+  assert.equal(inviteCode({ room: 'ABCDEFG2', apiBase: 'https://evil', token }), 'ABCDEFG2');
 });
 test('empty/non-HTTPS base disables network without touching request', async () => {
   for (const base of ['', 'http://example.test', 'javascript:evil']) {
@@ -193,4 +198,42 @@ test('finished-room unknown leave keeps polling through GET failure, pauses hidd
 test('out-of-turn seat cannot send any move', async () => {
   const h = setup(); await entered(h); h.s.seat = 1; await h.s.move(0, 1);
   assert.equal(h.calls.length, 1); h.s.destroy();
+});
+
+test('WeChat text responses that omit null, false, empty history and seat 0 still enter', async () => {
+  const h = setup();
+  const created = h.s.enter('', preset);
+  h.respond(JSON.stringify({ roomCode: '0246', token, room: { code: '0246', status: 'waiting', players: [{ profile: preset }] } }));
+  assert.equal(await created, true);
+  assert.equal(h.s.seat, 0); assert.equal(h.s.room.game, null); assert.equal(h.s.room.revision, 0);
+  h.s.destroy();
+  const guest = setup();
+  const game = engine.createGame({ mode: 'pvp', aiFirst: false });
+  delete game.winner; delete game.aiFirst; delete game.history;
+  game.currentPlayer = '0'; game.piles = game.piles.map(String);
+  const joined = guest.s.enter('1357', preset);
+  guest.queue.shift().resolve({ data: JSON.stringify({ roomCode: '1357', token, seat: '1', room: {
+    code: '1357', revision: '1', status: 'playing',
+    players: [{ profile: preset }, { seat: '1', profile: preset }], game } }) });
+  assert.equal(await joined, true);
+  assert.equal(guest.s.seat, 1); assert.equal(guest.s.room.game.winner, null);
+  assert.equal(guest.s.room.game.aiFirst, false); assert.deepEqual(guest.s.room.game.history, []);
+  assert.equal(guest.s.canMove(), false); guest.s.destroy();
+});
+
+test('current 8-character server codes still enter while 4-digit rooms are rolling out', async () => {
+  const h = setup();
+  const legacy = 'ABCDEFG2';
+  const pending = h.s.enter(legacy, preset);
+  h.respond({ roomCode: legacy, token, seat: 0, room: { code: legacy, revision: 0, status: 'waiting', players: [{ seat: 0, profile: preset }], game: null } });
+  assert.equal(await pending, true);
+  assert.equal(h.s.room.code, legacy); h.s.destroy();
+});
+
+test('a full room tells both phones to create a new code instead of rejoining', async () => {
+  const h = setup();
+  const pending = h.s.enter(code, preset);
+  h.respond({ error: { code: 'ROOM_FULL', message: '该房间已有两人或已开始' } }, 409);
+  await pending;
+  assert.match(h.s.error, /新建一个房间码/); assert.equal(h.s.creationUnknown, false);
 });
