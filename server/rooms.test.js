@@ -67,6 +67,84 @@ test('lost move response can be reconciled by the other device without double ap
   assert.deepEqual(s.move(a.roomCode, b.token, move).room, recovered);
   assert.deepEqual(s.read(a.roomCode, a.token).room, recovered);
 });
+test('injected server time is present on every snapshot without exposing credentials', () => {
+  let time = 1000;
+  const s = createRoomService({ now: () => time, randomFirst: () => 0 });
+  const a = s.create(profile(0));
+  assert.equal(a.room.serverNow, time); assert.equal(a.room.turnDeadline, null);
+  time = 2000;
+  const b = s.join(a.roomCode, profile(3));
+  assert.equal(b.room.serverNow, time); assert.equal(b.room.turnDeadline, 32000);
+  time = 2100;
+  const moved = s.move(a.roomCode, a.token, { actionId: 'clockmove1', expectedRevision: 1, row: 0, count: 1 }).room;
+  assert.equal(moved.serverNow, time); assert.equal(moved.turnDeadline, 32100);
+  time = 2200;
+  const read = s.read(a.roomCode, b.token).room;
+  assert.equal(read.serverNow, time); assert.equal(read.revision, moved.revision);
+  assert.equal(JSON.stringify(read).includes(a.token), false);
+  assert.equal(JSON.stringify(read).includes(b.token), false);
+});
+
+test('advancing clock cannot put a snapshot past an unprocessed deadline', () => {
+  let time = 1000, advancing = false;
+  const s = createRoomService({ now: () => advancing ? time++ : time, randomFirst: () => 0, turnMs: 100 });
+  const a = s.create(profile(0)), b = s.join(a.roomCode, profile(3));
+  assert.equal(b.room.turnDeadline, 1100);
+  time = 1098; advancing = true;
+  const before = s.read(a.roomCode, a.token).room;
+  assert.equal(before.serverNow, 1099); assert.equal(before.revision, 1);
+  assert.ok(before.serverNow < before.turnDeadline);
+  const after = s.read(a.roomCode, b.token).room;
+  assert.ok(after.serverNow >= 1100); assert.equal(after.revision, 2);
+  assert.equal(after.game.history[0].count, 1); assert.ok(after.serverNow < after.turnDeadline);
+  const move = { actionId: 'advance01', expectedRevision: after.revision, row: 1, count: 1 };
+  const moved = s.move(a.roomCode, b.token, move).room;
+  assert.equal(moved.turnDeadline, moved.serverNow + 100);
+  const replay = s.move(a.roomCode, b.token, move).room;
+  assert.equal(replay.revision, moved.revision); assert.equal(replay.game.history.length, 2);
+  assert.ok(replay.serverNow < replay.turnDeadline);
+  assert.throws(() => s.read(a.roomCode, 'f'.repeat(64)), error('UNAUTHORIZED'));
+});
+
+test('deadline boundary gives precedence to on-time moves and expires moves at the deadline', () => {
+  let time = 1000;
+  const s = createRoomService({ now: () => time, randomFirst: () => 0, turnMs: 100 });
+  const a = s.create(profile(0)), b = s.join(a.roomCode, profile(3));
+  const first = { actionId: 'ontime01', expectedRevision: 1, row: 0, count: 2 };
+  time = 1099;
+  const moved = s.move(a.roomCode, a.token, first).room;
+  assert.deepEqual(moved.game.piles, [1, 5, 7]); assert.equal(moved.turnDeadline, 1199);
+  time = 1199;
+  assert.throws(() => s.move(a.roomCode, b.token, { actionId: 'late0001', expectedRevision: 2, row: 1, count: 2 }), error('REVISION_CONFLICT'));
+  const expired = s.read(a.roomCode, a.token).room;
+  assert.equal(expired.revision, 3); assert.deepEqual(expired.game.piles, [0, 5, 7]);
+  assert.equal(expired.game.history[1].player, 1); assert.equal(expired.game.history[1].count, 1);
+  assert.equal(expired.turnDeadline, 1299);
+  assert.deepEqual(s.read(a.roomCode, b.token).room, expired);
+  assert.deepEqual(s.move(a.roomCode, a.token, first).room, expired);
+});
+
+test('missed windows catch up one die per turn and stop at a terminal game', () => {
+  let time = 0;
+  const s = createRoomService({ now: () => time, randomFirst: () => 1, turnMs: 100 });
+  const a = s.create(profile(0)), b = s.join(a.roomCode, profile(3));
+  time = 450;
+  let state = s.read(a.roomCode, a.token).room;
+  assert.equal(state.revision, 5); assert.equal(state.turnDeadline, 500);
+  assert.deepEqual(state.game.piles, [0, 4, 7]);
+  assert.deepEqual(state.game.history.map(x => [x.player, x.row, x.count]), [[1, 0, 1], [0, 0, 1], [1, 0, 1], [0, 1, 1]]);
+  assert.deepEqual(s.read(a.roomCode, b.token).room, state);
+  time = 1500;
+  state = s.read(a.roomCode, b.token).room;
+  assert.equal(state.status, 'finished'); assert.equal(state.turnDeadline, null);
+  assert.equal(state.revision, 16); assert.equal(state.game.history.length, 15);
+  assert.ok(state.game.history.every(x => x.count === 1));
+  assert.equal(state.game.winner, 0);
+  assert.deepEqual(s.read(a.roomCode, a.token).room, state);
+  time = 2000;
+  assert.equal(s.read(a.roomCode, a.token).room.revision, 16);
+});
+
 test('room capability is scoped, leave revokes both seats, idle and hard TTL are bounded', () => {
   let time = 0; const s = createRoomService({ now: () => time, idleMs: 100, maxAgeMs: 250 });
   const a = s.create(profile(0)), x = s.create(profile(1));
@@ -134,6 +212,32 @@ test('actual HTTP two-client lifecycle, token privacy, exact methods and error s
   assert.equal((await call(path + '/leave', { method: 'POST', token: b.body.token, data: {} })).status, 200);
   assert.equal((await call(path, { token: a.body.token })).status, 404);
 });
+test('HTTP clients converge after competing legal moves and an exact-deadline timeout', async t => {
+  let time = 1000;
+  const { call } = await httpFixture(t, { now: () => time, randomFirst: () => 0, turnMs: 100 });
+  const a = (await call('/v1/rooms', { method: 'POST', data: { profile: profile(0) } })).body;
+  const path = '/v1/rooms/' + a.roomCode;
+  const b = (await call(path + '/join', { method: 'POST', data: { profile: profile(3) } })).body;
+  assert.equal(b.room.serverNow, 1000); assert.equal(b.room.turnDeadline, 1100);
+  time = 1099;
+  const requests = [1, 2].map((count, index) => call(path + '/moves', { method: 'POST', token: a.token,
+    data: { actionId: 'compete0' + index, expectedRevision: 1, row: 0, count } }));
+  const results = await Promise.all(requests);
+  assert.deepEqual(results.map(x => x.status).sort(), [200, 409]);
+  const winning = results.find(x => x.status === 200).body.room;
+  assert.equal(winning.revision, 2); assert.equal(winning.game.history.length, 1);
+  assert.equal(winning.serverNow, 1099); assert.equal(winning.turnDeadline, 1199);
+  time = 1199;
+  const late = await call(path + '/moves', { method: 'POST', token: b.token,
+    data: { actionId: 'deadline01', expectedRevision: 2, row: 1, count: 2 } });
+  assert.equal(late.status, 409);
+  const [left, right] = await Promise.all([call(path, { token: a.token }), call(path, { token: b.token })]);
+  assert.deepEqual(left.body.room, right.body.room);
+  assert.equal(left.body.room.serverNow, 1199); assert.equal(left.body.room.revision, 3);
+  assert.equal(left.body.room.game.history[1].count, 1);
+  assert.equal(left.body.room.game.history[1].player, 1);
+});
+
 test('HTTP rejects oversized bodies, wrong content types, forged profiles and bounded rate', async t => {
   const { call } = await httpFixture(t);
   assert.equal((await call('/v1/rooms', { method: 'POST', data: { profile: profile(0), winner: 0 } })).status, 400);

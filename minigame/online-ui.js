@@ -4,7 +4,7 @@ const config = require('./online-config');
 module.exports = {
   initOnline() {
     this.onlineMode = false; this.onlineCode = ''; this.codePad = false; this.codeLegacy = false; this.codePadPage = 0; this.profileGeneration = 0; this.avatarOperation = null;
-    this.onlineProfile = { avatar: { type: 'preset', index: 0 } }; this.avatarImages = new Map();
+    this.onlineProfile = { avatar: { type: 'preset', index: 0 } }; this.onlineProfileChosen = false; this.avatarImages = new Map();
     this.online = new OnlineSession(this.platform, config.apiBase, () => this.onlineChanged(), config.accessKey);
     this.receiveInvite(this.platform.launchQuery ? this.platform.launchQuery() : {});
   },
@@ -18,6 +18,7 @@ module.exports = {
   },
   openOnline() {
     this.invalidate(); this.modal = null; this.onlineMode = true; this.codePad = false;
+    if (!this.onlineProfileChosen) this.onlineProfile = { avatar: { type: 'preset', index: this.settings.avatars[0] } };
     this.state = null; this.gameId = null; this.screen = 'online'; this.render();
   },
   onlineChanged() {
@@ -28,9 +29,20 @@ module.exports = {
       this.state = room.game; this.screen = 'game';
       if (changed) this.selected = null;
       if (room.status === 'finished' && !this.modal) this.modal = { type: 'online-result' };
+      const generation = this.online.clockGeneration;
+      if (room.status === 'playing' && generation !== this.seenTurnDeadline) {
+        this.seenTurnDeadline = generation;
+        this.armTurnClock();
+      }
+      if (room.status !== 'playing') {
+        this.seenTurnDeadline = null;
+        this.turnClockToken = (this.turnClockToken || 0) + 1;
+      }
     } else {
       // Retire the result view before its authoritative game state disappears.
       if (this.modal && this.modal.type === 'online-result') this.modal = null;
+      this.seenTurnDeadline = null;
+      this.turnClockToken = (this.turnClockToken || 0) + 1;
       this.state = null; this.screen = 'online';
     }
     this.render();
@@ -118,7 +130,7 @@ module.exports = {
         // Album selection resolves once; a live WeChat authorization button can be tapped again.
         if (kind === 'album') this.avatarOperation = null;
         this.online.error = error.message;
-      } else { this.avatarOperation = null; this.onlineProfile = profile; this.online.error = '头像仅在确认入房后发送；微信头像是否非灰以实际预览为准'; this.cancelOnlineAvatar(); }
+      } else { this.avatarOperation = null; this.onlineProfile = profile; this.onlineProfileChosen = true; this.online.error = '头像仅在确认入房后发送；微信头像是否非灰以实际预览为准'; this.cancelOnlineAvatar(); }
       this.render();
     };
     try {
@@ -196,8 +208,7 @@ module.exports = {
       const cx = x + i * (cell + gap);
       this.panel(cx, y, cell, h, '#183a2d', i < code.length ? '#d8b674' : '#385743', 6);
       const ch = code[i] || '';
-      if (/^[0-9]$/.test(ch)) this.drawDigit(Number(ch), cx + 3, y + 3, Math.max(8, cell - 6), Math.max(8, h - 6));
-      else if (ch) this.text(ch, cx + cell / 2, y + h / 2, Math.min(16, cell * 0.5), '#f2ecd9', 'center', 'bold');
+      if (ch) this.text(ch, cx + cell / 2, y + h / 2, Math.min(22, cell * 0.62), '#f2ecd9', 'center', 'bold');
     }
   },
   drawCodePad() {
@@ -211,22 +222,16 @@ module.exports = {
       const keys = [...LEGACY_ALPHABET].slice(this.codePadPage ? 16 : 0, this.codePadPage ? 32 : 16);
       keys.forEach((ch, i) => {
         const col = i % cols, row = Math.floor(i / cols);
-        this.button('code-key-' + ch, /^[0-9]$/.test(ch) ? '' : ch, x + col * (keyW + gap), y + row * (keyH + gap), keyW, keyH,
-          () => this.appendRoomCode(ch), { disabled: this.online.busy || this.onlineCode.length >= limit, size: 16 });
-        if (/^[0-9]$/.test(ch)) {
-          const box = this.hitBoxes[this.hitBoxes.length - 1];
-          this.drawDigit(Number(ch), box.x + 12, box.y + 6, box.w - 24, box.h - 12);
-        }
+        this.button('code-key-' + ch, ch, x + col * (keyW + gap), y + row * (keyH + gap), keyW, keyH,
+          () => this.appendRoomCode(ch), { disabled: this.online.busy || this.onlineCode.length >= limit, size: 18 });
       });
       y += 4 * keyH + 3 * gap + 6;
     } else {
       const cols = 5, keyH = 44, keyW = (span - gap * (cols - 1)) / cols;
       '0123456789'.split('').forEach((ch, i) => {
         const col = i % cols, row = Math.floor(i / cols);
-        this.button('code-key-' + ch, '', x + col * (keyW + gap), y + row * (keyH + gap), keyW, keyH,
-          () => this.appendRoomCode(ch), { disabled: this.online.busy || this.onlineCode.length >= limit });
-        const box = this.hitBoxes[this.hitBoxes.length - 1];
-        this.drawDigit(Number(ch), box.x + 10, box.y + 6, box.w - 20, box.h - 12);
+        this.button('code-key-' + ch, ch, x + col * (keyW + gap), y + row * (keyH + gap), keyW, keyH,
+          () => this.appendRoomCode(ch), { disabled: this.online.busy || this.onlineCode.length >= limit, size: 20 });
       });
       y += 2 * keyH + gap + 6;
     }
@@ -269,7 +274,7 @@ module.exports = {
       this.onlineAvatar(this.onlineProfile, 0, w / 2 - 22, y, 44); y += 50;
       this.button('online-preset', '内置形象（可直接玩）', x, y, span, 44, () => {
         this.cancelOnlineAvatar(); const a = this.onlineProfile.avatar;
-        this.onlineProfile = { avatar: { type: 'preset', index: a.type === 'preset' ? (a.index + 1) % 6 : 0 } }; this.render();
+        this.onlineProfile = { avatar: { type: 'preset', index: a.type === 'preset' ? (a.index + 1) % 6 : 0 } }; this.onlineProfileChosen = true; this.render();
       }, { disabled: this.online.busy }); y += 46;
       this.button('online-album', '自选相册图片', x, y, half, 44, () => this.chooseOnlineAvatar('album'), { disabled: this.profileBusy || this.online.busy });
       this.button('online-wechat', '自愿微信头像', x + half + 8, y, half, 44, () => this.chooseOnlineAvatar('wechat'), { disabled: this.profileBusy || this.online.busy }); y += 46;
