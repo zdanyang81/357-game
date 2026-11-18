@@ -80,7 +80,7 @@ function createPlatform(wx) {
   const raf = typeof requestAnimationFrame === 'function' ? requestAnimationFrame : null;
   const caf = typeof cancelAnimationFrame === 'function' ? cancelAnimationFrame : null;
   // Sharing is always optional and never grants rewards or unlocks play.
-  const shareData = () => ({ title: '357 · 最后一颗不能拿，你能赢吗？' });
+  const shareData = () => ({ title: '357取骰 · 最后一颗不能拿，你能赢吗？' });
   try { wx.showShareMenu({ menus: ['shareAppMessage'] }); wx.onShareAppMessage(shareData); } catch (_) {}
   return {
     canvas, width, height, dpr,
@@ -121,10 +121,10 @@ function createPlatform(wx) {
     inviteRoom(code) {
       if (!CODE.test(code)) throw new Error('房间码无效');
       // Keep conversation selection available when launched from a group toolbar.
-      return wx.shareAppMessage({ title: '邀请你来357对战', query: 'room=' + encodeURIComponent(code), toCurrentGroup: false });
+      return wx.shareAppMessage({ title: '邀请你来357取骰对战', query: 'room=' + encodeURIComponent(code), toCurrentGroup: false });
     },
     async inputRoomCode() {
-      const result = await call('showModal', { title: '加入357房间', editable: true,
+      const result = await call('showModal', { title: '加入357取骰房间', editable: true,
         placeholderText: '4位数字房间码', confirmText: '预填', cancelText: '取消' });
       return result.confirm ? result.content : null;
     },

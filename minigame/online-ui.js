@@ -203,7 +203,7 @@ module.exports = {
   drawCodePad() {
     const w = this.width, x = 24, span = w - 48, gap = 6, half = (span - 8) / 2;
     let y = this.top + 6;
-    this.text(this.codeLegacy ? '输入8位旧房间码' : '输入4位房间码', w / 2, y + 8, 16, '#d8b674', 'center', 'bold'); y += 24;
+    this.text(this.codeLegacy ? '357取骰 · 输入8位旧房间码' : '357取骰 · 输入4位房间码', w / 2, y + 8, 16, '#d8b674', 'center', 'bold'); y += 24;
     this.drawCodeSlots(this.onlineCode, x, y, span, this.codeLegacy ? 40 : 52, this.codeLegacy ? 8 : 4); y += this.codeLegacy ? 46 : 58;
     const limit = this.codeLegacy ? 8 : 4;
     if (this.codeLegacy) {
@@ -255,7 +255,7 @@ module.exports = {
     if (!this.online.room && this.codePad) { this.drawCodePad(); return; }
     const w = this.width, x = 24, span = w - 48, room = this.online.room, half = (span - 8) / 2;
     let y = this.top + 12;
-    this.text('好友联网', w / 2, y + 10, 19, '#d8b674', 'center', 'bold'); y += 32;
+    this.text('357取骰 · 好友联网', w / 2, y + 10, 19, '#d8b674', 'center', 'bold'); y += 32;
     if (room) {
       const slots = room.code.length, slotH = slots > 4 ? 46 : 64;
       this.drawCodeSlots(room.code, x, y, span, slotH, slots); y += slotH + 8;
