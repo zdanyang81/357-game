@@ -582,7 +582,7 @@ class GameUI {
     const spare = this.bottom - this.top - contentHeight - 28;
     let y = this.top + (compact ? 8 : 14) + Math.max(0, spare / 2);
     this.logo(w / 2, y + (compact ? 20 : 28), compact ? 36 : 48);
-    this.text('经 典 取 骰 游 戏', w / 2, y + (compact ? 50 : 66), 12, MUTED, 'center');
+    this.text('357取骰', w / 2, y + (compact ? 50 : 66), 17, INK, 'center', 'bold');
     y += titleHeight;
     const modes = [ ['pvp', 'easy', '同屏双人', '与身边的人切磋'], ['ai', 'easy', 'AI · 休闲', '轻松熟悉规则'],
       ['ai', 'medium', 'AI · 挑战', '多想一步'], ['ai', 'hard', 'AI · 高手', '更高难度对手'] ];

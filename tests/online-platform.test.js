@@ -54,7 +54,7 @@ test('cold/hot query forwarded and invitation contains room only, never token', 
   const h = fixture(); assert.equal(h.p.launchQuery().room, '2468'); let shown;
   h.p.onShow(options => { shown = options.query; }); h.handlers.show({ query: { room: '1357' } });
   assert.equal(shown.room, '1357'); h.p.inviteRoom('2468');
-  assert.deepEqual(h.calls.find(c => c[0] === 'share')[1], { title: '邀请你来357对战', query: 'room=2468', toCurrentGroup: false });
+  assert.deepEqual(h.calls.find(c => c[0] === 'share')[1], { title: '邀请你来357取骰对战', query: 'room=2468', toCurrentGroup: false });
   h.p.inviteRoom('8024');
   assert.equal(h.calls.filter(c => c[0] === 'share').at(-1)[1].query, 'room=8024');
   await h.p.copyRoomCode('0246');

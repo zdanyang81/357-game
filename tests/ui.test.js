@@ -107,6 +107,19 @@ function harness(options = {}) {
   return h;
 }
 
+test('home renders the exact filing name on compact and regular screens', t => {
+  for (const size of [{ width: 320, height: 568 }, { width: 375, height: 812 }]) {
+    const h = harness(size); t.after(() => h.ui.destroy());
+    const labels = h.calls.filter(c => c.method === 'fillText');
+    const title = labels.find(c => c.args[0] === '357取骰');
+    assert.ok(title, 'the full game name must be drawn by the running UI');
+    assert.equal(title.args[1], size.width / 2);
+    const modes = h.ui.hitBoxes.filter(box => box.id.startsWith('mode-'));
+    assert.ok(title.args[2] < Math.min(...modes.map(box => box.y)), 'name must not overlap mode buttons');
+    assert.ok(!labels.some(c => c.args[0] === '经 典 取 骰 游 戏'));
+  }
+});
+
 test('existing three-way opener works in both modes and random rerolls on restart', t => {
   for (const mode of ['ai', 'pvp']) for (const first of [0, 1, 'random']) {
     const h = harness(); t.after(() => h.ui.destroy());
