@@ -120,6 +120,18 @@ test('home renders the exact filing name on compact and regular screens', t => {
   }
 });
 
+test('online lobby and room-code entry show the full game name without inventing a room', t => {
+  for (const size of [{ width: 320, height: 568 }, { width: 375, height: 812 }]) {
+    const h = harness(size); t.after(() => h.ui.destroy());
+    h.ui.openOnline();
+    assert.ok(h.calls.some(c => c.method === 'fillText' && c.args[0] === '357取骰 · 好友联网'));
+    h.ui.openCodePad();
+    assert.ok(h.calls.some(c => c.method === 'fillText' && c.args[0] === '357取骰 · 输入4位房间码'));
+    assert.equal(h.ui.online.room, null);
+    assert.equal(h.ui.onlineCode, '');
+  }
+});
+
 test('existing three-way opener works in both modes and random rerolls on restart', t => {
   for (const mode of ['ai', 'pvp']) for (const first of [0, 1, 'random']) {
     const h = harness(); t.after(() => h.ui.destroy());
